@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/komari-monitor/komari/database"
@@ -13,7 +12,6 @@ import (
 	"github.com/komari-monitor/komari/database/dbcore"
 	"github.com/komari-monitor/komari/database/models"
 	"github.com/komari-monitor/komari/database/tasks"
-	"github.com/komari-monitor/komari/internal/config"
 	"github.com/komari-monitor/komari/pkg/rpc"
 	"github.com/komari-monitor/komari/protocol/v1"
 	"github.com/komari-monitor/komari/utils"
@@ -225,7 +223,6 @@ func getNodes(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcEr
 	}
 	meta := rpc.MetaFromContext(ctx)
 
-	SendIpAddrToGuest, _ := config.GetAs[bool](config.SendIpAddrToGuestKey)
 	if meta.Principal == nil || !meta.Principal.HasRole(rpc.RoleAdmin) {
 		// 过滤 Hidden 节点并隐藏敏感字段
 		filtered := make([]models.Client, 0, len(cinfo))
@@ -233,22 +230,7 @@ func getNodes(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcEr
 			if node.Hidden { // 非 admin 不显示隐藏节点
 				continue
 			}
-			if SendIpAddrToGuest {
-				if node.IPv4 != "" {
-					node.IPv4 = strings.Split(node.IPv4, ".")[0] + ".*.*.*"
-				}
-				if node.IPv6 != "" {
-					node.IPv6 = strings.Split(node.IPv6, ":")[0] + ":*:*:*:*:*:*:*"
-				}
-			} else {
-				node.IPv4 = ""
-				node.IPv6 = ""
-			}
-
-			node.Remark = ""
-			node.Version = ""
-			node.Token = ""
-			filtered = append(filtered, node)
+			filtered = append(filtered, redactGuestNode(node))
 		}
 		cinfo = filtered
 	}
@@ -267,6 +249,19 @@ func getNodes(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcEr
 		nodeMap[node.UUID] = node
 	}
 	return nodeMap, nil
+}
+
+// redactGuestNode keeps the public node metadata required by themes while
+// removing fields that can reveal an origin address or administrative data.
+// The cazi.cc deployment intentionally ignores send_ip_addr_to_guest so a
+// future settings change cannot accidentally re-enable address disclosure.
+func redactGuestNode(node models.Client) models.Client {
+	node.IPv4 = ""
+	node.IPv6 = ""
+	node.Remark = ""
+	node.Version = ""
+	node.Token = ""
+	return node
 }
 
 func getPublicInfo(_ context.Context, _ *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {

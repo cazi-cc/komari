@@ -1,9 +1,11 @@
 package jsonrpc
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/komari-monitor/komari/database/models"
 	"gorm.io/gorm"
@@ -49,5 +51,37 @@ func TestFilterAdminLogsByMessageType(t *testing.T) {
 	}
 	if len(statement.Vars) != 1 || statement.Vars[0] != "visitor" {
 		t.Fatalf("unexpected filter variables: %#v", statement.Vars)
+	}
+}
+
+func TestParseAdminVisitorLog(t *testing.T) {
+	message := visitorAuditMessage{
+		Event:     "page_view",
+		Path:      "/network-comparison",
+		Route:     "network-comparison",
+		UserAgent: "test-browser",
+		Detail:    map[string]any{"referrer_host": "example.com"},
+	}
+	encoded, err := json.Marshal(message)
+	if err != nil {
+		t.Fatalf("marshal visitor message: %v", err)
+	}
+	stamp := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	got, ok := parseAdminVisitorLog(models.Log{
+		ID:      7,
+		IP:      "203.0.113.8",
+		Time:    stamp,
+		MsgType: "visitor",
+		Message: visitorAuditMessagePrefix + string(encoded),
+	})
+	if !ok {
+		t.Fatal("expected visitor log to parse")
+	}
+	if got.ID != 7 || got.Event != message.Event || got.Path != message.Path || got.IP != "203.0.113.8" {
+		t.Fatalf("unexpected structured visitor log: %#v", got)
+	}
+
+	if _, ok := parseAdminVisitorLog(models.Log{Message: "unrelated"}); ok {
+		t.Fatal("non-visitor message must not parse as a visitor log")
 	}
 }

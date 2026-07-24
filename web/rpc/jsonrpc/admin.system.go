@@ -38,6 +38,15 @@ func init() {
 		},
 		Returns: "{ logs: Log[], total: number }",
 	})
+	RegisterWithGroupAndMeta("getVisitorLogs", rpc.RoleAdmin, adminGetVisitorLogs, &rpc.MethodMeta{
+		Name:    "admin:getVisitorLogs",
+		Summary: "Get structured recent visitor page-view records",
+		Params: []rpc.ParamMeta{
+			{Name: "limit", Type: "number", Description: "Page size (default 50, maximum 200)"},
+			{Name: "page", Type: "number", Description: "One-based page number (default 1)"},
+		},
+		Returns: "{ visitors: VisitorLog[], total: number }",
+	})
 	reg("exec", adminExec, "Execute a command on clients")
 
 	reg("testSendMessage", adminTestSendMessage, "Send a test notification")
@@ -95,6 +104,70 @@ func filterAdminLogsByMessageType(query *gorm.DB, msgType string) *gorm.DB {
 		return query.Where("msg_type = ?", msgType)
 	}
 	return query
+}
+
+type adminVisitorLog struct {
+	ID        uint           `json:"id"`
+	IP        string         `json:"ip"`
+	Time      time.Time      `json:"time"`
+	Event     string         `json:"event"`
+	Path      string         `json:"path,omitempty"`
+	Route     string         `json:"route,omitempty"`
+	Target    string         `json:"target,omitempty"`
+	UserAgent string         `json:"user_agent,omitempty"`
+	Detail    map[string]any `json:"detail,omitempty"`
+}
+
+func adminGetVisitorLogs(_ context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
+	var params struct {
+		Limit int `json:"limit"`
+		Page  int `json:"page"`
+	}
+	req.BindParams(&params)
+	if params.Limit == 0 {
+		params.Limit = 50
+	}
+	if params.Page == 0 {
+		params.Page = 1
+	}
+	if params.Limit < 1 || params.Limit > 200 || params.Page < 1 {
+		return nil, rpc.MakeError(rpc.InvalidParams, "limit must be 1-200 and page must be positive", nil)
+	}
+
+	logs, total, err := queryAdminLogs(dbcore.GetDBInstance(), params.Limit, params.Page, "visitor")
+	if err != nil {
+		return nil, rpc.MakeError(rpc.InternalError, "Failed to retrieve visitor logs: "+err.Error(), nil)
+	}
+
+	visitors := make([]adminVisitorLog, 0, len(logs))
+	for _, entry := range logs {
+		if visitor, ok := parseAdminVisitorLog(entry); ok {
+			visitors = append(visitors, visitor)
+		}
+	}
+	return map[string]any{"visitors": visitors, "total": total}, nil
+}
+
+func parseAdminVisitorLog(entry models.Log) (adminVisitorLog, bool) {
+	encoded, ok := strings.CutPrefix(entry.Message, visitorAuditMessagePrefix)
+	if !ok {
+		return adminVisitorLog{}, false
+	}
+	var message visitorAuditMessage
+	if err := json.Unmarshal([]byte(encoded), &message); err != nil {
+		return adminVisitorLog{}, false
+	}
+	return adminVisitorLog{
+		ID:        entry.ID,
+		IP:        entry.IP,
+		Time:      entry.Time,
+		Event:     message.Event,
+		Path:      message.Path,
+		Route:     message.Route,
+		Target:    message.Target,
+		UserAgent: message.UserAgent,
+		Detail:    message.Detail,
+	}, true
 }
 
 func adminExec(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {

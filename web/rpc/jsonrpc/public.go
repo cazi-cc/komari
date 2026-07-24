@@ -55,12 +55,7 @@ func publicGetNodesInformation(ctx context.Context, _ *rpc.JsonRpcRequest) (any,
 		if clientList[i].Hidden && !isLogin {
 			continue
 		}
-		clientList[i].IPv4 = ""
-		clientList[i].IPv6 = ""
-		clientList[i].Remark = ""
-		clientList[i].Version = ""
-		clientList[i].Token = ""
-		clientList[j] = clientList[i]
+		clientList[j] = redactGuestNode(clientList[i])
 		j++
 	}
 	clientList = clientList[:j]

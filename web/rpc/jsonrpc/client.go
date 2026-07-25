@@ -45,18 +45,20 @@ func clientUploadPingResult(ctx context.Context, req *rpc.JsonRpcRequest) (any, 
 		return nil, rpc.MakeError(rpc.InvalidParams, "client_uuid not found", nil)
 	}
 	var params struct {
-		TaskID   uint   `json:"task_id"`
-		Value    int    `json:"value"`
-		PingType string `json:"ping_type"`
+		TaskID   uint                       `json:"task_id"`
+		Value    int                        `json:"value"`
+		PingType string                     `json:"ping_type"`
+		Details  *models.ProbeResultDetails `json:"details,omitempty"`
 	}
 	if err := req.BindParams(&params); err != nil {
 		return nil, rpc.MakeError(rpc.InvalidParams, "Invalid request: "+err.Error(), nil)
 	}
 	record := models.PingRecord{
-		Client: uuid,
-		TaskId: params.TaskID,
-		Value:  params.Value,
-		Time:   time.Now().UTC(),
+		Client:  uuid,
+		TaskId:  params.TaskID,
+		Value:   params.Value,
+		Time:    time.Now().UTC(),
+		Details: params.Details,
 	}
 	if err := tasks.SavePingRecord(record); err != nil {
 		return nil, rpc.MakeError(rpc.InternalError, "Failed to save ping result: "+err.Error(), nil)

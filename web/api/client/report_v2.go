@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/komari-monitor/komari/database/clients"
+	"github.com/komari-monitor/komari/database/models"
 	v2 "github.com/komari-monitor/komari/protocol/v2"
 	"github.com/komari-monitor/komari/utils/notifier"
 	agent_runtime "github.com/komari-monitor/komari/web/agent"
@@ -72,7 +73,7 @@ func handleV2RPC(uuid string, req v2.Request, allowWait bool) v2.Response {
 		if err := bindV2Params(req.Params, &params); err != nil {
 			return v2.Error(req.ID, -32602, "invalid ping result params", err.Error())
 		}
-		if err := ingestPingResult(uuid, params.TaskID, params.Value); err != nil {
+		if err := ingestPingResult(uuid, params.TaskID, params.PingType, params.Value, probeDetailsFromV2(params.Details)); err != nil {
 			return v2.Error(req.ID, -32000, "failed to save ping result", err.Error())
 		}
 		return v2.Success(req.ID, gin.H{"status": "success"})
@@ -92,6 +93,34 @@ func handleV2RPC(uuid string, req v2.Request, allowWait bool) v2.Response {
 		})
 	default:
 		return v2.Error(req.ID, -32601, "method not found", req.Method)
+	}
+}
+
+func probeDetailsFromV2(details *v2.ProbeResultDetails) *models.ProbeResultDetails {
+	if details == nil {
+		return nil
+	}
+	return &models.ProbeResultDetails{
+		Reachable:             details.Reachable,
+		SamplesSent:           details.SamplesSent,
+		SamplesReceived:       details.SamplesReceived,
+		LossRatio:             details.LossRatio,
+		PacketSize:            details.PacketSize,
+		MinLatencyMS:          details.MinLatencyMS,
+		MaxLatencyMS:          details.MaxLatencyMS,
+		AverageLatencyMS:      details.AverageLatencyMS,
+		JitterMS:              details.JitterMS,
+		DNSMS:                 details.DNSMS,
+		ConnectMS:             details.ConnectMS,
+		TLSMS:                 details.TLSMS,
+		TTFBMS:                details.TTFBMS,
+		HTTPStatusCode:        details.HTTPStatusCode,
+		HTTPStatusOKRatio:     details.HTTPStatusOKRatio,
+		TCPRetransmissions:    details.TCPRetransmissions,
+		ResolvedAddressHash:   details.ResolvedAddressHash,
+		ResolvedAddressFamily: details.ResolvedAddressFamily,
+		DNSMode:               details.DNSMode,
+		ErrorCode:             details.ErrorCode,
 	}
 }
 

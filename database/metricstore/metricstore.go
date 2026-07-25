@@ -619,6 +619,20 @@ func createMetricDefinitionsWithDefaultRetention(ctx context.Context, s *metric.
 		{Name: MetricConnectionsUDP, Type: metric.TypeGauge, Unit: "count", Description: "UDP connections", RetentionDays: defaultRetentionDays},
 		{Name: MetricPingLatency, Type: metric.TypeGauge, Unit: "ms", Description: "Ping latency", RetentionDays: defaultRetentionDays},
 		{Name: MetricPingLoss, Type: metric.TypeGauge, Unit: "ratio", Description: "Ping packet loss indicator", RetentionDays: defaultRetentionDays},
+		{Name: MetricProbeReachable, Type: metric.TypeGauge, Unit: "bool", Description: "Probe transport reachability", RetentionDays: defaultRetentionDays},
+		{Name: MetricProbeLatencyMin, Type: metric.TypeGauge, Unit: "ms", Description: "Minimum latency within a probe run", RetentionDays: defaultRetentionDays},
+		{Name: MetricProbeLatencyMax, Type: metric.TypeGauge, Unit: "ms", Description: "Maximum latency within a probe run", RetentionDays: defaultRetentionDays},
+		{Name: MetricProbeJitter, Type: metric.TypeGauge, Unit: "ms", Description: "Latency standard deviation within a probe run", RetentionDays: defaultRetentionDays},
+		{Name: MetricProbeSamplesSent, Type: metric.TypeGauge, Unit: "count", Description: "Samples attempted within a probe run", RetentionDays: defaultRetentionDays},
+		{Name: MetricProbeSamplesReceived, Type: metric.TypeGauge, Unit: "count", Description: "Samples receiving a network response", RetentionDays: defaultRetentionDays},
+		{Name: MetricProbePacketSize, Type: metric.TypeGauge, Unit: "bytes", Description: "ICMP payload size", RetentionDays: defaultRetentionDays},
+		{Name: MetricProbeDNS, Type: metric.TypeGauge, Unit: "ms", Description: "DNS resolution duration", RetentionDays: defaultRetentionDays},
+		{Name: MetricProbeConnect, Type: metric.TypeGauge, Unit: "ms", Description: "TCP connection duration", RetentionDays: defaultRetentionDays},
+		{Name: MetricProbeTLS, Type: metric.TypeGauge, Unit: "ms", Description: "TLS handshake duration", RetentionDays: defaultRetentionDays},
+		{Name: MetricProbeTTFB, Type: metric.TypeGauge, Unit: "ms", Description: "HTTP time to first byte", RetentionDays: defaultRetentionDays},
+		{Name: MetricProbeHTTPStatus, Type: metric.TypeGauge, Unit: "code", Description: "Last HTTP status code in a probe run", RetentionDays: defaultRetentionDays},
+		{Name: MetricProbeHTTPStatusOK, Type: metric.TypeGauge, Unit: "ratio", Description: "Share of HTTP responses matching the configured status policy", RetentionDays: defaultRetentionDays},
+		{Name: MetricProbeTCPRetrans, Type: metric.TypeGauge, Unit: "count", Description: "Connection-level TCP retransmissions observed through TCP_INFO", RetentionDays: defaultRetentionDays},
 	}
 
 	for _, def := range definitions {
@@ -673,13 +687,17 @@ func writePingRecords(ctx context.Context, records []models.PingRecord) error {
 		return nil
 	}
 
-	points := make([]metric.Point, 0, len(records)*2)
+	points := make([]metric.Point, 0, len(records)*10)
 	for _, rec := range records {
 		tags := map[string]string{"task_id": fmt.Sprintf("%d", rec.TaskId)}
 		loss := 0.0
 		if rec.Value < 0 {
 			loss = 1
 		}
+		if rec.Details != nil {
+			loss = clampRatio(rec.Details.LossRatio)
+		}
+		labels := probeMetricLabels(rec.Details)
 		points = append(points,
 			metric.Point{
 				MetricName: MetricPingLatency,
@@ -687,6 +705,7 @@ func writePingRecords(ctx context.Context, records []models.PingRecord) error {
 				Timestamp:  rec.Time,
 				Value:      float64(rec.Value),
 				Tags:       tags,
+				Labels:     labels,
 			},
 			metric.Point{
 				MetricName: MetricPingLoss,
@@ -694,10 +713,95 @@ func writePingRecords(ctx context.Context, records []models.PingRecord) error {
 				Timestamp:  rec.Time,
 				Value:      loss,
 				Tags:       tags,
+				Labels:     labels,
 			},
 		)
+		if rec.Details == nil {
+			continue
+		}
+		reachable := 0.0
+		if rec.Details.Reachable {
+			reachable = 1
+		}
+		points = append(points,
+			probeMetricPoint(MetricProbeReachable, rec, tags, labels, reachable),
+			probeMetricPoint(MetricProbeSamplesSent, rec, tags, labels, float64(rec.Details.SamplesSent)),
+			probeMetricPoint(MetricProbeSamplesReceived, rec, tags, labels, float64(rec.Details.SamplesReceived)),
+		)
+		if rec.Details.SamplesReceived > 0 {
+			points = append(points,
+				probeMetricPoint(MetricProbeLatencyMin, rec, tags, labels, rec.Details.MinLatencyMS),
+				probeMetricPoint(MetricProbeLatencyMax, rec, tags, labels, rec.Details.MaxLatencyMS),
+				probeMetricPoint(MetricProbeJitter, rec, tags, labels, rec.Details.JitterMS),
+			)
+		}
+		if rec.Details.PacketSize > 0 {
+			points = append(points, probeMetricPoint(MetricProbePacketSize, rec, tags, labels, float64(rec.Details.PacketSize)))
+		}
+		if rec.Details.DNSMS > 0 {
+			points = append(points, probeMetricPoint(MetricProbeDNS, rec, tags, labels, rec.Details.DNSMS))
+		}
+		if rec.Details.ConnectMS > 0 {
+			points = append(points, probeMetricPoint(MetricProbeConnect, rec, tags, labels, rec.Details.ConnectMS))
+		}
+		if rec.Details.TLSMS > 0 {
+			points = append(points, probeMetricPoint(MetricProbeTLS, rec, tags, labels, rec.Details.TLSMS))
+		}
+		if rec.Details.TTFBMS > 0 {
+			points = append(points, probeMetricPoint(MetricProbeTTFB, rec, tags, labels, rec.Details.TTFBMS))
+		}
+		if rec.PingType == "http" || rec.Details.HTTPStatusCode > 0 {
+			if rec.Details.HTTPStatusCode > 0 {
+				points = append(points, probeMetricPoint(MetricProbeHTTPStatus, rec, tags, labels, float64(rec.Details.HTTPStatusCode)))
+			}
+			points = append(points, probeMetricPoint(MetricProbeHTTPStatusOK, rec, tags, labels, clampRatio(rec.Details.HTTPStatusOKRatio)))
+		}
+		if rec.PingType == "tcp" || rec.PingType == "http" {
+			points = append(points, probeMetricPoint(MetricProbeTCPRetrans, rec, tags, labels, float64(rec.Details.TCPRetransmissions)))
+		}
 	}
 	return s.WriteBatch(ctx, points)
+}
+
+func clampRatio(value float64) float64 {
+	if value < 0 {
+		return 0
+	}
+	if value > 1 {
+		return 1
+	}
+	return value
+}
+
+func probeMetricLabels(details *models.ProbeResultDetails) map[string]string {
+	if details == nil {
+		return nil
+	}
+	labels := map[string]string{}
+	if details.ResolvedAddressFamily != "" {
+		labels["address_family"] = details.ResolvedAddressFamily
+	}
+	if details.DNSMode != "" {
+		labels["dns_mode"] = details.DNSMode
+	}
+	if details.ErrorCode != "" {
+		labels["error_code"] = details.ErrorCode
+	}
+	if len(labels) == 0 {
+		return nil
+	}
+	return labels
+}
+
+func probeMetricPoint(name string, rec models.PingRecord, tags, labels map[string]string, value float64) metric.Point {
+	return metric.Point{
+		MetricName: name,
+		EntityID:   rec.Client,
+		Timestamp:  rec.Time,
+		Value:      value,
+		Tags:       tags,
+		Labels:     labels,
+	}
 }
 
 // GetRecordsByClientAndTime 从 metric store 查询记录并重构为 models.Record

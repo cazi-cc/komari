@@ -1,27 +1,41 @@
 package metricstore
 
 const (
-	MetricCPU            = "cpu.usage"
-	MetricGPU            = "gpu.usage"
-	MetricGPUDeviceUsage = "gpu.device.usage"
-	MetricGPUMem         = "gpu.memory.used"
-	MetricGPUMemTotal    = "gpu.memory.total"
-	MetricGPUTemp        = "gpu.temperature"
-	MetricRAM            = "memory.used"
-	MetricSwap           = "swap.used"
-	MetricLoad           = "load.average"
-	MetricDisk           = "disk.used"
-	MetricNetIn          = "net.in.rate"
-	MetricNetOut         = "net.out.rate"
-	MetricNetTotalUp     = "net.total.up"
-	MetricNetTotalDown   = "net.total.down"
-	MetricTrafficUp      = "traffic.up"
-	MetricTrafficDown    = "traffic.down"
-	MetricProcess        = "process.count"
-	MetricConnections    = "connections.tcp"
-	MetricConnectionsUDP = "connections.udp"
-	MetricPingLatency    = "ping.latency_ms"
-	MetricPingLoss       = "ping.loss"
+	MetricCPU                  = "cpu.usage"
+	MetricGPU                  = "gpu.usage"
+	MetricGPUDeviceUsage       = "gpu.device.usage"
+	MetricGPUMem               = "gpu.memory.used"
+	MetricGPUMemTotal          = "gpu.memory.total"
+	MetricGPUTemp              = "gpu.temperature"
+	MetricRAM                  = "memory.used"
+	MetricSwap                 = "swap.used"
+	MetricLoad                 = "load.average"
+	MetricDisk                 = "disk.used"
+	MetricNetIn                = "net.in.rate"
+	MetricNetOut               = "net.out.rate"
+	MetricNetTotalUp           = "net.total.up"
+	MetricNetTotalDown         = "net.total.down"
+	MetricTrafficUp            = "traffic.up"
+	MetricTrafficDown          = "traffic.down"
+	MetricProcess              = "process.count"
+	MetricConnections          = "connections.tcp"
+	MetricConnectionsUDP       = "connections.udp"
+	MetricPingLatency          = "ping.latency_ms"
+	MetricPingLoss             = "ping.loss"
+	MetricProbeReachable       = "probe.reachable"
+	MetricProbeLatencyMin      = "probe.latency.min_ms"
+	MetricProbeLatencyMax      = "probe.latency.max_ms"
+	MetricProbeJitter          = "probe.jitter_ms"
+	MetricProbeSamplesSent     = "probe.samples.sent"
+	MetricProbeSamplesReceived = "probe.samples.received"
+	MetricProbePacketSize      = "probe.packet.size_bytes"
+	MetricProbeDNS             = "probe.dns_ms"
+	MetricProbeConnect         = "probe.connect_ms"
+	MetricProbeTLS             = "probe.tls_ms"
+	MetricProbeTTFB            = "probe.ttfb_ms"
+	MetricProbeHTTPStatus      = "probe.http.status_code"
+	MetricProbeHTTPStatusOK    = "probe.http.status_ok_ratio"
+	MetricProbeTCPRetrans      = "probe.tcp.retransmissions"
 )
 
 // loadRecordMetricNames are the entity-level metrics used to reconstruct the
@@ -48,7 +62,13 @@ var gpuDeviceRecordMetricNames = []string{
 var recordMetricNames = joinMetricNames(loadRecordMetricNames, gpuDeviceRecordMetricNames)
 
 // Ping has an independent retention and cleanup boundary.
-var pingMetricNames = []string{MetricPingLatency, MetricPingLoss}
+var pingMetricNames = []string{
+	MetricPingLatency, MetricPingLoss, MetricProbeReachable,
+	MetricProbeLatencyMin, MetricProbeLatencyMax, MetricProbeJitter,
+	MetricProbeSamplesSent, MetricProbeSamplesReceived, MetricProbePacketSize,
+	MetricProbeDNS, MetricProbeConnect, MetricProbeTLS, MetricProbeTTFB,
+	MetricProbeHTTPStatus, MetricProbeHTTPStatusOK, MetricProbeTCPRetrans,
+}
 
 func joinMetricNames(groups ...[]string) []string {
 	total := 0

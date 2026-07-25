@@ -58,10 +58,11 @@ type BasicInfoParams struct {
 }
 
 type PingResultParams struct {
-	TaskID     uint      `json:"task_id"`
-	PingType   string    `json:"ping_type"`
-	Value      int       `json:"value"`
-	FinishedAt time.Time `json:"finished_at"`
+	TaskID     uint                `json:"task_id"`
+	PingType   string              `json:"ping_type"`
+	Value      int                 `json:"value"`
+	Details    *ProbeResultDetails `json:"details,omitempty"`
+	FinishedAt time.Time           `json:"finished_at"`
 }
 
 type PullParams struct {
@@ -76,9 +77,42 @@ type ExecParams struct {
 }
 
 type PingParams struct {
-	TaskID uint   `json:"ping_task_id"`
-	Type   string `json:"ping_type"`
-	Target string `json:"ping_target"`
+	TaskID  uint         `json:"ping_task_id"`
+	Type    string       `json:"ping_type"`
+	Target  string       `json:"ping_target"`
+	Options ProbeOptions `json:"ping_options,omitempty"`
+}
+
+type ProbeOptions struct {
+	PacketSize       int    `json:"packet_size,omitempty"`
+	SampleCount      int    `json:"sample_count,omitempty"`
+	TimeoutMS        int    `json:"timeout_ms,omitempty"`
+	DNSServer        string `json:"dns_server,omitempty"`
+	PreferredIP      string `json:"preferred_ip,omitempty"`
+	ValidStatusCodes []int  `json:"valid_status_codes,omitempty"`
+}
+
+type ProbeResultDetails struct {
+	Reachable             bool    `json:"reachable"`
+	SamplesSent           int     `json:"samples_sent,omitempty"`
+	SamplesReceived       int     `json:"samples_received,omitempty"`
+	LossRatio             float64 `json:"loss_ratio,omitempty"`
+	PacketSize            int     `json:"packet_size,omitempty"`
+	MinLatencyMS          float64 `json:"min_latency_ms,omitempty"`
+	MaxLatencyMS          float64 `json:"max_latency_ms,omitempty"`
+	AverageLatencyMS      float64 `json:"average_latency_ms,omitempty"`
+	JitterMS              float64 `json:"jitter_ms,omitempty"`
+	DNSMS                 float64 `json:"dns_ms,omitempty"`
+	ConnectMS             float64 `json:"connect_ms,omitempty"`
+	TLSMS                 float64 `json:"tls_ms,omitempty"`
+	TTFBMS                float64 `json:"ttfb_ms,omitempty"`
+	HTTPStatusCode        int     `json:"http_status_code,omitempty"`
+	HTTPStatusOKRatio     float64 `json:"http_status_ok_ratio,omitempty"`
+	TCPRetransmissions    int     `json:"tcp_retransmissions,omitempty"`
+	ResolvedAddressHash   string  `json:"resolved_address_hash,omitempty"`
+	ResolvedAddressFamily string  `json:"resolved_address_family,omitempty"`
+	DNSMode               string  `json:"dns_mode,omitempty"`
+	ErrorCode             string  `json:"error_code,omitempty"`
 }
 
 type MessageParams struct {

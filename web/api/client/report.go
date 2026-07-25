@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/komari-monitor/komari/database/clients"
+	"github.com/komari-monitor/komari/database/models"
 	v1 "github.com/komari-monitor/komari/protocol/v1"
 	"github.com/komari-monitor/komari/utils/notifier"
 	agent_runtime "github.com/komari-monitor/komari/web/agent"
@@ -245,16 +246,17 @@ func processMessage(conn *connection.SafeConn, message []byte, uuid string) {
 		}
 	case "ping_result":
 		var reqBody struct {
-			PingTaskID uint   `json:"task_id"`
-			PingResult int    `json:"value"`
-			PingType   string `json:"ping_type"`
+			PingTaskID uint                       `json:"task_id"`
+			PingResult int                        `json:"value"`
+			PingType   string                     `json:"ping_type"`
+			Details    *models.ProbeResultDetails `json:"details,omitempty"`
 		}
 		err = json.Unmarshal(message, &reqBody)
 		if err != nil {
 			conn.WriteJSON(gin.H{"status": "error", "error": "Invalid ping result format"})
 			return
 		}
-		if err := ingestPingResult(uuid, reqBody.PingTaskID, reqBody.PingResult); err != nil {
+		if err := ingestPingResult(uuid, reqBody.PingTaskID, reqBody.PingType, reqBody.PingResult, reqBody.Details); err != nil {
 			conn.WriteJSON(gin.H{"status": "error", "error": "Failed to save ping result"})
 		}
 	default:

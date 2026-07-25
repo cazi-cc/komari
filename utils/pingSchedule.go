@@ -58,16 +58,25 @@ func (m *PingTaskManager) Reload(pingTasks []models.PingTask) error {
 // executePingTask 执行单个PingTask
 func executePingTask(ctx context.Context, task models.PingTask) {
 	var message struct {
-		TaskID  uint   `json:"ping_task_id"`
-		Message string `json:"message"`
-		Type    string `json:"ping_type"`
-		Target  string `json:"ping_target"`
+		TaskID  uint            `json:"ping_task_id"`
+		Message string          `json:"message"`
+		Type    string          `json:"ping_type"`
+		Target  string          `json:"ping_target"`
+		Options v2.ProbeOptions `json:"ping_options,omitempty"`
 	}
 
 	message.Message = "ping"
 	message.TaskID = task.Id
 	message.Type = task.Type
 	message.Target = task.Target
+	message.Options = v2.ProbeOptions{
+		PacketSize:       task.ProbeConfig.PacketSize,
+		SampleCount:      task.ProbeConfig.SampleCount,
+		TimeoutMS:        task.ProbeConfig.TimeoutMS,
+		DNSServer:        task.ProbeConfig.DNSServer,
+		PreferredIP:      task.ProbeConfig.PreferredIP,
+		ValidStatusCodes: append([]int(nil), task.ProbeConfig.ValidStatusCodes...),
+	}
 
 	for _, clientUUID := range targetPingClientUUIDs(task) {
 		select {
@@ -78,7 +87,12 @@ func executePingTask(ctx context.Context, task models.PingTask) {
 			// Context is still active, continue.
 		}
 
-		agent_runtime.DispatchPing(clientUUID, message, v2.PingParams{TaskID: task.Id, Type: task.Type, Target: task.Target})
+		agent_runtime.DispatchPing(clientUUID, message, v2.PingParams{
+			TaskID:  task.Id,
+			Type:    task.Type,
+			Target:  task.Target,
+			Options: message.Options,
+		})
 	}
 }
 

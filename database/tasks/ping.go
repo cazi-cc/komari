@@ -2,6 +2,8 @@ package tasks
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/komari-monitor/komari/database/dbcore"
@@ -12,18 +14,23 @@ import (
 )
 
 // AddPingTask 创建延迟监测任务。defaultOn 表示新加入的服务器是否自动开启此监测。
-func AddPingTask(clients []string, defaultOn bool, name string, target, task_type string, interval int) (uint, error) {
+func AddPingTask(clients []string, defaultOn bool, name string, target, taskType string, interval int, probeConfig models.ProbeConfig) (uint, error) {
 	db := dbcore.GetDBInstance()
 	normalizedClients := normalizePingClients(models.StringArray(clients))
-	task := models.PingTask{
-		Clients:   normalizedClients,
-		DefaultOn: defaultOn,
-		Name:      name,
-		Type:      task_type,
-		Target:    target,
-		Interval:  interval,
+	normalizedConfig, err := normalizeProbeConfig(taskType, interval, probeConfig)
+	if err != nil {
+		return 0, err
 	}
-	err := db.Transaction(func(tx *gorm.DB) error {
+	task := models.PingTask{
+		Clients:     normalizedClients,
+		DefaultOn:   defaultOn,
+		Name:        name,
+		Type:        taskType,
+		Target:      target,
+		Interval:    interval,
+		ProbeConfig: normalizedConfig,
+	}
+	err = db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&task).Error; err != nil {
 			return err
 		}
@@ -67,14 +74,20 @@ func EditPingTask(tasks []*models.PingTask) error {
 	db := dbcore.GetDBInstance()
 	for _, task := range tasks {
 		task.Clients = normalizePingClients(task.Clients)
+		normalizedConfig, err := normalizeProbeConfig(task.Type, task.Interval, task.ProbeConfig)
+		if err != nil {
+			return err
+		}
+		task.ProbeConfig = normalizedConfig
 		// 使用 map 显式更新，避免 GORM struct Updates 跳过 false/0/空切片等零值。
 		updates := map[string]interface{}{
-			"name":        task.Name,
-			"clients":     task.Clients,
-			"all_clients": task.DefaultOn,
-			"type":        task.Type,
-			"target":      task.Target,
-			"interval":    task.Interval,
+			"name":         task.Name,
+			"clients":      task.Clients,
+			"all_clients":  task.DefaultOn,
+			"type":         task.Type,
+			"target":       task.Target,
+			"interval":     task.Interval,
+			"probe_config": task.ProbeConfig,
 		}
 		result := db.Model(&models.PingTask{}).Where("id = ?", task.Id).Updates(updates)
 		if result.RowsAffected == 0 {
@@ -83,6 +96,57 @@ func EditPingTask(tasks []*models.PingTask) error {
 	}
 	ReloadPingSchedule()
 	return nil
+}
+
+func normalizeProbeConfig(taskType string, interval int, config models.ProbeConfig) (models.ProbeConfig, error) {
+	switch taskType {
+	case "icmp", "tcp", "http":
+	default:
+		return models.ProbeConfig{}, fmt.Errorf("unsupported ping task type %q", taskType)
+	}
+	if interval <= 0 {
+		return models.ProbeConfig{}, fmt.Errorf("interval must be positive")
+	}
+	if config.SampleCount < 0 || config.SampleCount > 10 {
+		return models.ProbeConfig{}, fmt.Errorf("sample_count must be between 1 and 10")
+	}
+	if config.SampleCount > 1 && interval < 5 {
+		return models.ProbeConfig{}, fmt.Errorf("multi-sample probes require an interval of at least 5 seconds")
+	}
+	if config.TimeoutMS < 0 || config.TimeoutMS > 10000 {
+		return models.ProbeConfig{}, fmt.Errorf("timeout_ms must be between 1 and 10000")
+	}
+	if taskType == "icmp" && config.PacketSize != 0 && (config.PacketSize < 24 || config.PacketSize > 1400) {
+		return models.ProbeConfig{}, fmt.Errorf("packet_size must be between 24 and 1400")
+	}
+	if taskType != "icmp" {
+		config.PacketSize = 0
+	}
+	config.DNSServer = strings.TrimSpace(config.DNSServer)
+	if len(config.DNSServer) > 255 || strings.ContainsAny(config.DNSServer, "\r\n\t") {
+		return models.ProbeConfig{}, fmt.Errorf("dns_server is invalid")
+	}
+	config.PreferredIP = strings.TrimSpace(config.PreferredIP)
+	if config.PreferredIP != "" && config.PreferredIP != "4" && config.PreferredIP != "6" {
+		return models.ProbeConfig{}, fmt.Errorf("preferred_ip must be empty, 4 or 6")
+	}
+	if len(config.ValidStatusCodes) > 100 {
+		return models.ProbeConfig{}, fmt.Errorf("valid_status_codes cannot contain more than 100 values")
+	}
+	seenStatuses := make(map[int]struct{}, len(config.ValidStatusCodes))
+	statuses := make([]int, 0, len(config.ValidStatusCodes))
+	for _, status := range config.ValidStatusCodes {
+		if status < 100 || status > 599 {
+			return models.ProbeConfig{}, fmt.Errorf("invalid HTTP status code %d", status)
+		}
+		if _, exists := seenStatuses[status]; exists {
+			continue
+		}
+		seenStatuses[status] = struct{}{}
+		statuses = append(statuses, status)
+	}
+	config.ValidStatusCodes = statuses
+	return config, nil
 }
 
 // normalizePingClients 保持 clients 字段序列化为 JSON 数组，避免空值变成 null。

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -84,7 +85,7 @@ func (a *App) registerReloadHandlers(cors *security.CorsController) {
 // BuildRouter constructs the normal application router and starts reloads.
 func (a *App) BuildRouter() error {
 	r := gin.New()
-	if err := r.SetTrustedProxies([]string{"127.0.0.1", "::1"}); err != nil {
+	if err := r.SetTrustedProxies(trustedReverseProxies()); err != nil {
 		return fmt.Errorf("configure trusted reverse proxies: %w", err)
 	}
 	if err := visitorsecurity.Reload(); err != nil {
@@ -103,6 +104,20 @@ func (a *App) BuildRouter() error {
 	a.reload.Start()
 	a.engine = r
 	return nil
+}
+
+func trustedReverseProxies() []string {
+	configured := strings.TrimSpace(os.Getenv("KOMARI_TRUSTED_PROXIES"))
+	if configured == "" {
+		return []string{"127.0.0.1", "::1"}
+	}
+	proxies := strings.FieldsFunc(configured, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+	})
+	if len(proxies) == 0 {
+		return []string{"127.0.0.1", "::1"}
+	}
+	return proxies
 }
 
 // Run starts the normal HTTP server and blocks until shutdown or fatal error.

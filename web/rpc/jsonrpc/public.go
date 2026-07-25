@@ -85,6 +85,9 @@ func publicGetVersion(_ context.Context, _ *rpc.JsonRpcRequest) (any, *rpc.JsonR
 func publicGetMe(ctx context.Context, _ *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
 	guest := map[string]any{"username": "Guest", "logged_in": false}
 	meta := rpc.MetaFromContext(ctx)
+	if meta != nil {
+		guest["ip"] = meta.RemoteIP
+	}
 	if meta == nil || meta.User == nil {
 		return guest, nil
 	}
@@ -96,6 +99,7 @@ func publicGetMe(ctx context.Context, _ *rpc.JsonRpcRequest) (any, *rpc.JsonRpcE
 		"sso_type":    u.SSOType,
 		"sso_id":      u.SSOID,
 		"2fa_enabled": u.TwoFactor != "",
+		"ip":          meta.RemoteIP,
 	}, nil
 }
 

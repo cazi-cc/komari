@@ -15,8 +15,18 @@ var CurrentProvider GeoIPService
 var geoCache *cache.Cache
 
 type GeoInfo struct {
-	ISOCode string
-	Name    string
+	ISOCode      string `json:"iso_code"`
+	Name         string `json:"name"`
+	Region       string `json:"region,omitempty"`
+	City         string `json:"city,omitempty"`
+	PostalCode   string `json:"postal_code,omitempty"`
+	Timezone     string `json:"timezone,omitempty"`
+	Latitude     string `json:"latitude,omitempty"`
+	Longitude    string `json:"longitude,omitempty"`
+	ASN          string `json:"asn,omitempty"`
+	Organization string `json:"organization,omitempty"`
+	Hostname     string `json:"hostname,omitempty"`
+	Provider     string `json:"provider,omitempty"`
 }
 
 func init() {
@@ -133,6 +143,9 @@ func GetGeoInfo(ip net.IP) (*GeoInfo, error) {
 
 	info, err := CurrentProvider.GetGeoInfo(ip)
 	if err == nil && info != nil {
+		if info.Provider == "" {
+			info.Provider = providerName
+		}
 		geoCache.Set(cacheKey, info, cache.DefaultExpiration)
 	}
 	return info, err

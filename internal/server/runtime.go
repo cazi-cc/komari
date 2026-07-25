@@ -23,6 +23,7 @@ import (
 	logger "github.com/komari-monitor/komari/utils/log"
 	"github.com/komari-monitor/komari/utils/messageSender"
 	"github.com/komari-monitor/komari/utils/notifier"
+	"github.com/komari-monitor/komari/utils/visitorsecurity"
 	"github.com/komari-monitor/komari/web/api"
 	"github.com/komari-monitor/komari/web/oauth"
 	recoveryweb "github.com/komari-monitor/komari/web/recovery"
@@ -67,15 +68,31 @@ func (a *App) registerReloadHandlers(cors *security.CorsController) {
 			go messageSender.Initialize()
 		}
 	})
+	a.reload.Register("visitor-security", func(event config.ConfigEvent) {
+		if event.IsChanged(config.VisitorNotificationEnabledKey) ||
+			event.IsChanged(config.VisitorNotificationCooldownMinutesKey) ||
+			event.IsChanged(config.VisitorNotificationWhitelistKey) ||
+			event.IsChanged(config.VisitorIPBlocklistKey) {
+			if err := visitorsecurity.Reload(); err != nil {
+				logger.Errorf("server", "Failed to reload visitor security settings: %v", err)
+			}
+		}
+	})
 	a.reload.Register("cors", func(event config.ConfigEvent) { cors.Update(event) })
 }
 
 // BuildRouter constructs the normal application router and starts reloads.
 func (a *App) BuildRouter() error {
 	r := gin.New()
+	if err := r.SetTrustedProxies([]string{"127.0.0.1", "::1"}); err != nil {
+		return fmt.Errorf("configure trusted reverse proxies: %w", err)
+	}
+	if err := visitorsecurity.Reload(); err != nil {
+		return fmt.Errorf("load visitor security settings: %w", err)
+	}
 	r.Use(logger.GinLogger(), logger.GinRecovery())
 	cors := security.NewCorsController(a.settings.CorsOriginCheckEnabled, a.settings.CorsAllowedOrigins)
-	r.Use(cors.Middleware(), api.IdentityMiddleware(), api.PrivateSiteMiddleware(), noStoreAPIResponses())
+	r.Use(cors.Middleware(), api.IdentityMiddleware(), api.VisitorIPBlockMiddleware(), api.PrivateSiteMiddleware(), noStoreAPIResponses())
 
 	// The recovery UI belongs only to its temporary restricted listener.
 	r.GET(recoveryweb.PagePath, func(c *gin.Context) {

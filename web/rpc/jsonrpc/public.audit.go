@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"html"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +16,10 @@ import (
 	"github.com/komari-monitor/komari/database/auditlog"
 	"github.com/komari-monitor/komari/internal/config"
 	"github.com/komari-monitor/komari/pkg/rpc"
+	"github.com/komari-monitor/komari/utils/geoip"
+	logger "github.com/komari-monitor/komari/utils/log"
+	"github.com/komari-monitor/komari/utils/messageSender"
+	"github.com/komari-monitor/komari/utils/visitorsecurity"
 )
 
 const (
@@ -91,6 +98,9 @@ func publicRecordVisitorEvent(ctx context.Context, req *rpc.JsonRpcRequest) (any
 		ip = meta.RemoteIP
 		uuid = meta.UserUUID
 		userAgent = meta.UserAgent
+		if meta.Principal != nil && meta.Principal.HasRole(rpc.RoleAdmin) {
+			return map[string]any{"status": "ignored_administrator"}, nil
+		}
 	}
 
 	if !visitorAuditLimiter.Allow(ip, time.Now()) {
@@ -127,7 +137,60 @@ func publicRecordVisitorEvent(ctx context.Context, req *rpc.JsonRpcRequest) (any
 	}
 
 	auditlog.Log(ip, uuid, message, "visitor")
+	if visitorsecurity.ShouldNotify(ip, time.Now()) {
+		go sendNewVisitorNotification(ip, visitorAuditMessage{
+			Event:     event,
+			Path:      strings.TrimSpace(params.Path),
+			Route:     strings.TrimSpace(params.Route),
+			Target:    strings.TrimSpace(params.Target),
+			UserAgent: strings.TrimSpace(userAgent),
+		})
+	}
 	return map[string]any{"status": "success"}, nil
+}
+
+func sendNewVisitorNotification(ip string, event visitorAuditMessage) {
+	location := "归属地暂不可用"
+	if parsed := net.ParseIP(ip); parsed != nil {
+		if record, err := geoip.GetGeoInfo(parsed); err == nil && record != nil {
+			location = formatVisitorGeoSummary(record)
+		}
+	}
+
+	message := fmt.Sprintf(
+		"<b>IP</b>: <code>%s</code>\n<b>归属地</b>: %s\n<b>页面</b>: %s\n<b>设备</b>: %s\n<b>时间</b>: %s",
+		html.EscapeString(ip),
+		html.EscapeString(location),
+		html.EscapeString(firstNonEmpty(event.Path, event.Route, "/")),
+		html.EscapeString(firstNonEmpty(event.UserAgent, "未知")),
+		time.Now().Format("2006-01-02 15:04:05 MST"),
+	)
+	if err := messageSender.SendTextMessage(message, "Komari 新访客"); err != nil {
+		logger.Errorf("visitor", "Failed to send new visitor notification: %v", err)
+	}
+}
+
+func formatVisitorGeoSummary(record *geoip.GeoInfo) string {
+	parts := make([]string, 0, 4)
+	for _, value := range []string{record.Name, record.Region, record.City, record.Organization} {
+		value = strings.TrimSpace(value)
+		if value != "" && !containsString(parts, value) {
+			parts = append(parts, value)
+		}
+	}
+	if len(parts) == 0 {
+		return "未知"
+	}
+	return strings.Join(parts, " / ")
+}
+
+func containsString(values []string, candidate string) bool {
+	for _, value := range values {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func newVisitorAuditRateLimiter() *visitorAuditRateLimiter {

@@ -121,7 +121,8 @@ func (s *MaxMindGeoIPService) GetGeoInfo(ip net.IP) (*GeoInfo, error) {
 	geoInfo := &GeoInfo{
 		ISOCode: record.Country.ISOCode,
 		// 尝试获取英文国家名称，如果不存在则使用 ISO 代码作为备用
-		Name: record.Country.Names["en"],
+		Name:     record.Country.Names["en"],
+		Provider: "GeoLite2-Country",
 	}
 	if geoInfo.Name == "" && geoInfo.ISOCode != "" {
 		geoInfo.Name = geoInfo.ISOCode // 如果没有英文名称，回退到 ISO 代码

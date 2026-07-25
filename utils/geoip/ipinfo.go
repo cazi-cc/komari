@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -73,9 +74,40 @@ func (s *IPInfoService) GetGeoInfo(ip net.IP) (*GeoInfo, error) {
 	// 如果需要完整的国家名称，可能需要一个本地的 ISO 代码到名称的映射。
 	// 为了与 GetRegionUnicodeEmoji 函数兼容，我们直接使用 country 作为 ISOCode。
 	return &GeoInfo{
-		ISOCode: apiResp.Country, // IPinfo 的 'country' 字段就是 ISO 2-letter code
-		Name:    apiResp.Country, // 免费额度通常只提供 ISO 编码，这里暂时用 ISO 编码作为名称
+		ISOCode:      apiResp.Country,
+		Name:         apiResp.Country,
+		Region:       apiResp.Region,
+		City:         apiResp.City,
+		PostalCode:   apiResp.Postal,
+		Timezone:     apiResp.Timezone,
+		Latitude:     coordinate(apiResp.Loc, 0),
+		Longitude:    coordinate(apiResp.Loc, 1),
+		ASN:          organizationPart(apiResp.Org, true),
+		Organization: organizationPart(apiResp.Org, false),
+		Hostname:     apiResp.Hostname,
 	}, nil
+}
+
+func coordinate(location string, index int) string {
+	parts := strings.Split(location, ",")
+	if len(parts) != 2 {
+		return ""
+	}
+	return strings.TrimSpace(parts[index])
+}
+
+func organizationPart(value string, asn bool) string {
+	parts := strings.Fields(strings.TrimSpace(value))
+	if len(parts) == 0 {
+		return ""
+	}
+	if asn {
+		return parts[0]
+	}
+	if len(parts) == 1 {
+		return ""
+	}
+	return strings.Join(parts[1:], " ")
 }
 
 // UpdateDatabase 对于 ipinfo.io 是一个空操作，因为它是一个 Web 服务。

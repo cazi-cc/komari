@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -48,7 +50,7 @@ func NewIPAPIService() (*IPAPIService, error) {
 // GetGeoInfo 使用 ip-api.com 服务检索给定 IP 地址的地理位置信息。
 func (s *IPAPIService) GetGeoInfo(ip net.IP) (*GeoInfo, error) {
 	// API URL, 使用 fields 参数来仅请求需要的字段
-	apiURL := fmt.Sprintf("http://ip-api.com/json/%s?fields=status,message,country,countryCode", ip.String())
+	apiURL := fmt.Sprintf("http://ip-api.com/json/%s?fields=status,message,country,countryCode,regionName,city,zip,lat,lon,timezone,isp,org,as,query", ip.String())
 
 	resp, err := s.Client.Get(apiURL)
 	if err != nil {
@@ -66,9 +68,34 @@ func (s *IPAPIService) GetGeoInfo(ip net.IP) (*GeoInfo, error) {
 	}
 
 	return &GeoInfo{
-		ISOCode: apiResp.CountryCode,
-		Name:    apiResp.Country,
+		ISOCode:      apiResp.CountryCode,
+		Name:         apiResp.Country,
+		Region:       apiResp.RegionName,
+		City:         apiResp.City,
+		PostalCode:   apiResp.Zip,
+		Timezone:     apiResp.Timezone,
+		Latitude:     strconv.FormatFloat(apiResp.Lat, 'f', -1, 64),
+		Longitude:    strconv.FormatFloat(apiResp.Lon, 'f', -1, 64),
+		ASN:          firstField(apiResp.As),
+		Organization: firstNonEmptyString(apiResp.Org, apiResp.ISP),
 	}, nil
+}
+
+func firstField(value string) string {
+	fields := strings.Fields(value)
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // UpdateDatabase 对于 ip-api.com 是一个空操作，因为它是一个 Web 服务。

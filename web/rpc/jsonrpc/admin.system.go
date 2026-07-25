@@ -3,9 +3,11 @@ package jsonrpc
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -20,6 +22,7 @@ import (
 	"github.com/komari-monitor/komari/utils"
 	"github.com/komari-monitor/komari/utils/geoip"
 	"github.com/komari-monitor/komari/utils/messageSender"
+	"github.com/komari-monitor/komari/utils/visitorsecurity"
 	agent_runtime "github.com/komari-monitor/komari/web/agent"
 	"gorm.io/gorm"
 )
@@ -46,6 +49,16 @@ func init() {
 			{Name: "page", Type: "number", Description: "One-based page number (default 1)"},
 		},
 		Returns: "{ visitors: VisitorLog[], total: number }",
+	})
+	RegisterWithGroupAndMeta("getVisitorSecuritySettings", rpc.RoleAdmin, adminGetVisitorSecuritySettings, &rpc.MethodMeta{
+		Name:    "admin:getVisitorSecuritySettings",
+		Summary: "Get visitor notification, whitelist, and blocklist settings",
+		Returns: "VisitorSecuritySettings",
+	})
+	RegisterWithGroupAndMeta("updateVisitorSecuritySettings", rpc.RoleAdmin, adminUpdateVisitorSecuritySettings, &rpc.MethodMeta{
+		Name:    "admin:updateVisitorSecuritySettings",
+		Summary: "Update visitor notification, whitelist, and blocklist settings",
+		Returns: "VisitorSecuritySettings",
 	})
 	reg("exec", adminExec, "Execute a command on clients")
 
@@ -116,6 +129,8 @@ type adminVisitorLog struct {
 	Target    string         `json:"target,omitempty"`
 	UserAgent string         `json:"user_agent,omitempty"`
 	Detail    map[string]any `json:"detail,omitempty"`
+	Geo       *geoip.GeoInfo `json:"geo,omitempty"`
+	GeoError  string         `json:"geo_error,omitempty"`
 }
 
 func adminGetVisitorLogs(_ context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
@@ -145,7 +160,98 @@ func adminGetVisitorLogs(_ context.Context, req *rpc.JsonRpcRequest) (any, *rpc.
 			visitors = append(visitors, visitor)
 		}
 	}
+	enrichAdminVisitorGeo(visitors)
 	return map[string]any{"visitors": visitors, "total": total}, nil
+}
+
+func enrichAdminVisitorGeo(visitors []adminVisitorLog) {
+	indexes := make(map[string][]int)
+	for index := range visitors {
+		ip := strings.TrimSpace(visitors[index].IP)
+		if ip != "" {
+			indexes[ip] = append(indexes[ip], index)
+		}
+	}
+
+	semaphore := make(chan struct{}, 4)
+	var wait sync.WaitGroup
+	for ip, visitorIndexes := range indexes {
+		ip, visitorIndexes := ip, visitorIndexes
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			semaphore <- struct{}{}
+			record, lookupErr := lookupAdminVisitorGeo(ip)
+			<-semaphore
+			for _, index := range visitorIndexes {
+				visitors[index].Geo = record
+				if lookupErr != nil {
+					visitors[index].GeoError = lookupErr.Error()
+				}
+			}
+		}()
+	}
+	wait.Wait()
+}
+
+func lookupAdminVisitorGeo(ip string) (*geoip.GeoInfo, error) {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return nil, fmt.Errorf("无效 IP 地址")
+	}
+	switch {
+	case parsed.IsLoopback():
+		return &geoip.GeoInfo{Name: "本机回环地址（历史代理记录）", Provider: "local"}, nil
+	case parsed.IsPrivate():
+		return &geoip.GeoInfo{Name: "私有网络地址", Provider: "local"}, nil
+	case !parsed.IsGlobalUnicast():
+		return &geoip.GeoInfo{Name: "非公网地址", Provider: "local"}, nil
+	default:
+		return geoip.GetGeoInfo(parsed)
+	}
+}
+
+func adminGetVisitorSecuritySettings(_ context.Context, _ *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
+	settings, err := visitorsecurity.Load()
+	if err != nil {
+		return nil, rpc.MakeError(rpc.InternalError, "Failed to load visitor security settings: "+err.Error(), nil)
+	}
+	return settings, nil
+}
+
+func adminUpdateVisitorSecuritySettings(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
+	var settings visitorsecurity.Settings
+	if err := req.BindParams(&settings); err != nil {
+		return nil, rpc.MakeError(rpc.InvalidParams, "Invalid visitor security settings: "+err.Error(), nil)
+	}
+	normalized, _, _, err := visitorsecurity.NormalizeAndParse(settings)
+	if err != nil {
+		return nil, rpc.MakeError(rpc.InvalidParams, err.Error(), nil)
+	}
+	if meta := rpc.MetaFromContext(ctx); meta != nil {
+		blocked, matchErr := visitorsecurity.MatchesBlocklist(normalized.IPBlocklist, meta.RemoteIP)
+		if matchErr != nil {
+			return nil, rpc.MakeError(rpc.InvalidParams, matchErr.Error(), nil)
+		}
+		if blocked {
+			return nil, rpc.MakeError(rpc.InvalidParams, "当前管理员 IP 不能加入封禁名单", nil)
+		}
+	}
+
+	if err := config.SetMany(map[string]any{
+		config.VisitorNotificationEnabledKey:         normalized.NotificationEnabled,
+		config.VisitorNotificationCooldownMinutesKey: normalized.NotificationCooldownMinutes,
+		config.VisitorNotificationWhitelistKey:       normalized.NotificationWhitelist,
+		config.VisitorIPBlocklistKey:                 normalized.IPBlocklist,
+	}); err != nil {
+		return nil, rpc.MakeError(rpc.InternalError, "Failed to save visitor security settings: "+err.Error(), nil)
+	}
+	if err := visitorsecurity.Update(normalized); err != nil {
+		return nil, rpc.MakeError(rpc.InternalError, "Failed to apply visitor security settings: "+err.Error(), nil)
+	}
+	actor, ip := auditActor(ctx)
+	auditlog.Log(ip, actor, "visitor security settings updated", "info")
+	return normalized, nil
 }
 
 func parseAdminVisitorLog(entry models.Log) (adminVisitorLog, bool) {

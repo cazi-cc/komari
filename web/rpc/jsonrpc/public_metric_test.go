@@ -289,3 +289,19 @@ func TestMetricDownsampleIntervalCeilsToStandardInterval(t *testing.T) {
 		t.Fatalf("ranges beyond the standard table should ceil to whole days, got %s", got)
 	}
 }
+
+func TestMetricWindowAggregateIntervalKeepsRollingWindowInOneBucket(t *testing.T) {
+	start := time.Date(2026, 7, 26, 6, 51, 39, 0, time.UTC)
+	end := start.Add(6 * time.Hour)
+	interval := metricWindowAggregateInterval(end)
+
+	if interval%time.Hour != 0 {
+		t.Fatalf("window aggregate interval must remain rollup-compatible, got %s", interval)
+	}
+	if start.UnixNano()/interval.Nanoseconds() != end.UnixNano()/interval.Nanoseconds() {
+		t.Fatalf("rolling window crossed aggregate buckets: start=%s end=%s interval=%s", start, end, interval)
+	}
+	if interval <= time.Duration(end.Unix())*time.Second {
+		t.Fatalf("interval must include the full epoch-to-end range, got %s", interval)
+	}
+}

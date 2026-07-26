@@ -45,6 +45,7 @@ type publicMetricQueryParams struct {
 	ServerDownsample         *bool           `json:"server_downsample"`
 	DownsampleByMetric       map[string]bool `json:"downsample_by_metric"`
 	ServerDownsampleByMetric map[string]bool `json:"server_downsample_by_metric"`
+	WindowAggregate          bool            `json:"window_aggregate"`
 	FillEmpty                *bool           `json:"fill_empty"`
 
 	MaxPoints         int            `json:"max_points"`
@@ -239,7 +240,11 @@ func publicQueryMetrics(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc
 				item.DownsampleAlgorithm = string(algorithm)
 				now := time.Now().UTC()
 				interval := metricDownsampleInterval(end.Sub(start), maxPoints)
-				interval = store.CompatibleSeriesInterval(start, now, interval)
+				if params.WindowAggregate {
+					interval = metricWindowAggregateInterval(end)
+				} else {
+					interval = store.CompatibleSeriesInterval(start, now, interval)
+				}
 				item.IntervalSeconds = interval.Seconds()
 				points, err := store.Series(ctx, metric.AggregateQuery{
 					Query:          query,
@@ -1013,6 +1018,22 @@ func metricDownsampleInterval(rangeDuration time.Duration, maxPoints int) time.D
 		return time.Second
 	}
 	return metric.CeilStandardInterval(interval)
+}
+
+// metricWindowAggregateInterval returns an epoch-aligned interval large enough
+// to place every timestamp from the Unix epoch through end in one bucket. Using
+// whole hours keeps the interval compatible with every retained rollup tier.
+func metricWindowAggregateInterval(end time.Time) time.Duration {
+	const secondsPerHour = int64(time.Hour / time.Second)
+	maxHours := int64(^uint64(0)>>1) / int64(time.Hour)
+	hours := end.UTC().Unix()/secondsPerHour + 1
+	if hours < 1 {
+		hours = 1
+	}
+	if hours > maxHours {
+		hours = maxHours
+	}
+	return time.Duration(hours) * time.Hour
 }
 
 func maxInt(a, b int) int {

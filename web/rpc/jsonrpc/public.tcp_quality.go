@@ -9,6 +9,30 @@ import (
 	"github.com/komari-monitor/komari/pkg/rpc"
 )
 
+type tcpQualityTaskID uint
+
+func (id *tcpQualityTaskID) UnmarshalJSON(data []byte) error {
+	if len(data) > 0 && data[0] == '"' {
+		var value string
+		if err := json.Unmarshal(data, &value); err != nil {
+			return err
+		}
+		parsed, err := strconv.ParseUint(value, 10, 0)
+		if err != nil {
+			return err
+		}
+		*id = tcpQualityTaskID(parsed)
+		return nil
+	}
+
+	var value uint
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*id = tcpQualityTaskID(value)
+	return nil
+}
+
 func init() {
 	regPublic("getPublicTCPQualityTasks", publicGetTCPQualityTasks, "List public TCP quality task labels")
 	regPublic("getPublicTCPQualitySnapshot", publicGetTCPQualitySnapshot, "Read a precomputed TCP quality snapshot")
@@ -46,9 +70,9 @@ func publicGetTCPQualityTasks(_ context.Context, _ *rpc.JsonRpcRequest) (any, *r
 
 func publicGetTCPQualitySnapshot(_ context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
 	var params struct {
-		TaskID      uint   `json:"task_id"`
-		WindowHours int    `json:"window_hours"`
-		Hours       string `json:"hours"`
+		TaskID      tcpQualityTaskID `json:"task_id"`
+		WindowHours int              `json:"window_hours"`
+		Hours       string           `json:"hours"`
 	}
 	if err := req.BindParams(&params); err != nil {
 		return nil, rpc.MakeError(rpc.InvalidParams, err.Error(), nil)
@@ -61,7 +85,7 @@ func publicGetTCPQualitySnapshot(_ context.Context, req *rpc.JsonRpcRequest) (an
 	if _, ok := parseTCPQualityWindow(strconv.Itoa(params.WindowHours)); !ok || params.TaskID == 0 {
 		return nil, rpc.MakeError(rpc.InvalidParams, "task_id and a supported window_hours are required", nil)
 	}
-	payload, _, err := tasks.GetTCPQualitySnapshot(params.TaskID, params.WindowHours)
+	payload, _, err := tasks.GetTCPQualitySnapshot(uint(params.TaskID), params.WindowHours)
 	if err != nil {
 		return nil, rpc.MakeError(rpc.InternalError, "TCP quality snapshot is not ready", nil)
 	}

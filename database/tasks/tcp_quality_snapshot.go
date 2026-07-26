@@ -167,6 +167,9 @@ func buildTCPQualitySnapshot(ctx context.Context, task models.TCPQualityTask, ho
 		}
 		revisions[run.CatalogRevision] = struct{}{}
 		for _, result := range results {
+			if !tcpQualityResultUsable(result) {
+				continue
+			}
 			if _, selected := labelKeys[result.TargetKey]; !selected {
 				continue
 			}
@@ -257,6 +260,15 @@ func buildTCPQualitySnapshot(ctx context.Context, task models.TCPQualityTask, ho
 		}
 	}
 	return snapshot, nil
+}
+
+func tcpQualityResultUsable(result v2.TCPQualityTargetResult) bool {
+	switch result.ErrorCode {
+	case "", "partial_loss", "no_response":
+		return true
+	default:
+		return false
+	}
 }
 
 func tcpQualityClients(clientIDs []string) (map[string]models.Client, []string, error) {

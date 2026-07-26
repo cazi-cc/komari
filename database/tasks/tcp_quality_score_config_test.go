@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	v2 "github.com/komari-monitor/komari/protocol/v2"
 )
 
 func TestNormalizeTCPQualityScoreConfigRestoresInvalidWeightGroups(t *testing.T) {
@@ -68,6 +70,28 @@ func TestTCPQualityPublicSnapshotDoesNotContainEndpointFields(t *testing.T) {
 	for _, forbidden := range []string{`"address"`, `"host"`, `"port"`, `"target"`} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("public snapshot contains endpoint field %s: %s", forbidden, text)
+		}
+	}
+}
+
+func TestTCPQualityResultUsableExcludesToolFailures(t *testing.T) {
+	for _, code := range []string{"", "partial_loss", "no_response"} {
+		if !tcpQualityResultUsable(v2.TCPQualityTargetResult{ErrorCode: code}) {
+			t.Fatalf("measurement result %q was excluded", code)
+		}
+	}
+	for _, code := range []string{
+		"parse_error",
+		"partial_parse",
+		"nping_error",
+		"nping_unavailable",
+		"timeout",
+		"unsupported_platform",
+		"task_already_running",
+		"unknown_error",
+	} {
+		if tcpQualityResultUsable(v2.TCPQualityTargetResult{ErrorCode: code}) {
+			t.Fatalf("tool failure %q was included in scoring", code)
 		}
 	}
 }

@@ -25,6 +25,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/build-frontend
         with:
+          repository: https://github.com/cazi-cc/komari-web
+          ref: radix
           artifact-name: komari-frontend
 
   build-binary:

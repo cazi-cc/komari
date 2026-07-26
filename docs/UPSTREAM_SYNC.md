@@ -16,4 +16,8 @@
 - 公开接口不返回监测目标、客户端私有地址或 DNS 配置；
 - 旧 agent 的单值 ping 上报仍兼容；
 - 新 agent 的多样本损失率和 HTTP 状态指标可入库；
+- 后台一键命令、Agent 安装器、自更新和 Docker 镜像仍只指向
+  `cazi-cc/komari-agent`，并默认保留 `--disable-web-ssh`；
+- 管理前端仍从 `cazi-cc/komari-web` 构建，且通过后端分发清单取得
+  Agent 参数，不恢复上游硬编码；
 - 自定义镜像构建成功后再滚动替换生产容器。

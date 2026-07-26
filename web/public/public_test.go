@@ -2,6 +2,7 @@ package public
 
 import (
 	"io"
+	"io/fs"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -79,11 +80,25 @@ func TestReplaceHTMLLanguage(t *testing.T) {
 func TestStaticRestrictedDoesNotServeCustomAssetOverride(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	t.Chdir(t.TempDir())
+	entries, err := fs.ReadDir(PublicFS, "defaultTheme/dist/assets")
+	if err != nil {
+		t.Fatalf("read embedded frontend assets: %v", err)
+	}
+	assetName := ""
+	for _, entry := range entries {
+		if !entry.IsDir() && (strings.HasSuffix(entry.Name(), ".css") || strings.HasSuffix(entry.Name(), ".js")) {
+			assetName = entry.Name()
+			break
+		}
+	}
+	if assetName == "" {
+		t.Fatal("embedded frontend has no CSS or JavaScript asset")
+	}
+
 	assetPath := filepath.Join("data", "theme", "custom", "dist", "assets")
 	if err := os.MkdirAll(assetPath, 0o755); err != nil {
 		t.Fatalf("create custom theme asset directory: %v", err)
 	}
-	const assetName = "about-D4JKo971.css"
 	if err := os.WriteFile(filepath.Join(assetPath, assetName), []byte("custom override"), 0o644); err != nil {
 		t.Fatalf("write custom theme asset: %v", err)
 	}

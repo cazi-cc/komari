@@ -142,6 +142,9 @@ func CreateClient() (clientUUID, token string, err error) {
 	if err := tasks.AddDefaultOnClientUUID(clientUUID); err != nil {
 		logger.ErrorArgs("clients", "Failed to apply default-on ping tasks to new client:", err)
 	}
+	if err := tasks.AddDefaultTCPQualityClientUUID(clientUUID); err != nil {
+		logger.ErrorArgs("clients", "Failed to apply default-on TCP quality tasks to new client:", err)
+	}
 	return clientUUID, token, nil
 }
 
@@ -166,6 +169,9 @@ func CreateClientWithName(name string) (clientUUID, token string, err error) {
 	}
 	if err := tasks.AddDefaultOnClientUUID(clientUUID); err != nil {
 		logger.ErrorArgs("clients", "Failed to apply default-on ping tasks to new client:", err)
+	}
+	if err := tasks.AddDefaultTCPQualityClientUUID(clientUUID); err != nil {
+		logger.ErrorArgs("clients", "Failed to apply default-on TCP quality tasks to new client:", err)
 	}
 	return clientUUID, token, nil
 }

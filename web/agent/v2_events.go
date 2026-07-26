@@ -12,9 +12,10 @@ import (
 )
 
 const (
-	v2EventQueueLimit = 128
-	v2EventTTL        = 5 * time.Minute
-	v2PingEventTTL    = 3 * time.Second
+	v2EventQueueLimit    = 128
+	v2EventTTL           = 5 * time.Minute
+	v2PingEventTTL       = 3 * time.Second
+	v2TCPQualityEventTTL = 30 * time.Minute
 )
 
 type v2EventQueue struct {
@@ -79,6 +80,8 @@ func EnqueueV2Event(uuid, method string, params any) v2.Event {
 	ttl := v2EventTTL
 	if method == v2.MethodAgentPing {
 		ttl = v2PingEventTTL
+	} else if method == v2.MethodAgentTCPQuality {
+		ttl = v2TCPQualityEventTTL
 	}
 	event := v2.Event{
 		ID:        newV2EventID(),

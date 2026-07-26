@@ -92,6 +92,73 @@ type PingTask struct {
 	ProbeConfig ProbeConfig `json:"probe_config,omitempty" gorm:"type:longtext;not null;default:'{}'"`
 }
 
+// TCPQualityTask configures scheduled raw TCP SYN quality probes. Targets are
+// selected by public catalog labels; concrete IP addresses and ports are never
+// stored in the task or exposed through public APIs.
+type TCPQualityTask struct {
+	Id              uint        `json:"id,omitempty" gorm:"primaryKey;autoIncrement"`
+	Name            string      `json:"name" gorm:"type:varchar(255);not null;index"`
+	Clients         StringArray `json:"clients" gorm:"type:longtext"`
+	DefaultOn       bool        `json:"default_on" gorm:"column:all_clients;not null;default:false"`
+	Enabled         bool        `json:"enabled" gorm:"not null;default:true"`
+	Interval        int         `json:"interval" gorm:"type:int;not null;default:900"`
+	ProvinceCodes   StringArray `json:"province_codes" gorm:"type:longtext"`
+	ISPCode         StringArray `json:"isp_codes" gorm:"column:isp_codes;type:longtext"`
+	IPVersions      StringArray `json:"ip_versions" gorm:"type:longtext"`
+	ICMPTaskIDs     StringArray `json:"icmp_task_ids" gorm:"type:longtext"`
+	StandardPackets int         `json:"standard_packets" gorm:"type:int;not null;default:30"`
+	LargeEnabled    bool        `json:"large_enabled" gorm:"not null;default:false"`
+	LargePackets    int         `json:"large_packets" gorm:"type:int;not null;default:30"`
+	DelayMS         int         `json:"delay_ms" gorm:"type:int;not null;default:200"`
+	TimeoutMS       int         `json:"timeout_ms" gorm:"type:int;not null;default:3000"`
+	CreatedAt       time.Time   `json:"created_at"`
+	UpdatedAt       time.Time   `json:"updated_at"`
+}
+
+func (task TCPQualityTask) AppliesToClient(uuid string) bool {
+	if uuid == "" {
+		return false
+	}
+	for _, client := range task.Clients {
+		if client == uuid {
+			return true
+		}
+	}
+	return false
+}
+
+// TCPQualityRun stores one compressed batch returned by one agent. Keeping one
+// row per run bounds row counts even when a task selects many catalog targets.
+type TCPQualityRun struct {
+	Id              uint      `json:"-" gorm:"primaryKey;autoIncrement"`
+	TaskID          uint      `json:"task_id" gorm:"not null;index;uniqueIndex:idx_tcp_quality_run"`
+	Client          string    `json:"client" gorm:"type:varchar(36);not null;index;uniqueIndex:idx_tcp_quality_run"`
+	RunID           string    `json:"run_id" gorm:"type:varchar(64);not null;uniqueIndex:idx_tcp_quality_run"`
+	CatalogRevision string    `json:"catalog_revision" gorm:"type:varchar(64);not null;index"`
+	Payload         string    `json:"-" gorm:"type:longtext;not null"`
+	FinishedAt      time.Time `json:"finished_at" gorm:"index;not null"`
+	CreatedAt       time.Time `json:"-"`
+}
+
+// TCPQualitySnapshot is a server-generated, fixed public response. Visitors
+// read this table and never trigger a metric scan or target-catalog lookup.
+type TCPQualitySnapshot struct {
+	TaskID      uint      `json:"task_id" gorm:"primaryKey;autoIncrement:false"`
+	WindowHours int       `json:"window_hours" gorm:"primaryKey;autoIncrement:false"`
+	Payload     string    `json:"-" gorm:"type:longtext;not null"`
+	GeneratedAt time.Time `json:"generated_at" gorm:"index;not null"`
+}
+
+// TCPQualityCatalogCache persists the last known-good provider catalog. Its
+// payload is private because it contains concrete probe endpoints.
+type TCPQualityCatalogCache struct {
+	Id           uint      `json:"-" gorm:"primaryKey;autoIncrement:false"`
+	Revision     string    `json:"revision" gorm:"type:varchar(64);not null"`
+	GeneratedAt  time.Time `json:"generated_at"`
+	Payload      string    `json:"-" gorm:"type:longtext;not null"`
+	LastSyncedAt time.Time `json:"last_synced_at" gorm:"index;not null"`
+}
+
 // AppliesToClient 判断当前 PingTask 是否适用于指定服务器。
 func (task PingTask) AppliesToClient(uuid string) bool {
 	if uuid == "" {

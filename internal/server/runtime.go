@@ -20,6 +20,7 @@ import (
 	"github.com/komari-monitor/komari/database/tasks"
 	"github.com/komari-monitor/komari/internal/config"
 	"github.com/komari-monitor/komari/internal/scheduler"
+	"github.com/komari-monitor/komari/utils"
 	"github.com/komari-monitor/komari/utils/geoip"
 	logger "github.com/komari-monitor/komari/utils/log"
 	"github.com/komari-monitor/komari/utils/messageSender"
@@ -181,6 +182,9 @@ func registerScheduledWork() {
 	if err := tasks.ReloadPingSchedule(); err != nil {
 		logger.ErrorArgs("server", "Failed to reload ping schedule:", err)
 	}
+	if err := tasks.ReloadTCPQualitySchedule(); err != nil {
+		logger.ErrorArgs("server", "Failed to reload TCP quality schedule:", err)
+	}
 	if err := d_notification.ReloadLoadNotificationSchedule(); err != nil {
 		logger.ErrorArgs("server", "Failed to reload load notification schedule:", err)
 	}
@@ -189,6 +193,12 @@ func registerScheduledWork() {
 	}
 	if err := scheduler.AddContextFunc("metrics:compact", "@every 5m", true, compactMetricStore); err != nil {
 		logger.ErrorArgs("server", "Failed to add metric compact scheduled task:", err)
+	}
+	if err := scheduler.AddContextFunc("tcp-quality:catalog", "@every 10m", true, refreshTCPQualityCatalog); err != nil {
+		logger.ErrorArgs("server", "Failed to add TCP quality catalog refresh:", err)
+	}
+	if err := scheduler.AddContextFunc("tcp-quality:snapshots", "@every 5m", true, refreshTCPQualitySnapshots); err != nil {
+		logger.ErrorArgs("server", "Failed to add TCP quality snapshot refresh:", err)
 	}
 	if err := scheduler.AddFunc("notifier:traffic", "@every 1m", notifier.CheckTraffic); err != nil {
 		logger.ErrorArgs("server", "Failed to add traffic notification task:", err)
@@ -206,8 +216,27 @@ func cleanupScheduledData() {
 	if err := tasks.ClearTaskResultsByTimeBefore(before); err != nil {
 		logger.Errorf("server", "Failed to clean expired task results: %v", err)
 	}
+	if err := tasks.ClearTCPQualityRunsBefore(before); err != nil {
+		logger.Errorf("server", "Failed to clean expired TCP quality runs: %v", err)
+	}
 	auditlog.RemoveOldLogs()
 	accounts.RemoveExpiredSessions()
+}
+
+func refreshTCPQualityCatalog(ctx context.Context) {
+	refreshCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if _, err := utils.GetTCPQualityCatalog(refreshCtx, true); err != nil {
+		logger.Errorf("server", "Failed to refresh TCP quality catalog: %v", err)
+	}
+}
+
+func refreshTCPQualitySnapshots(ctx context.Context) {
+	refreshCtx, cancel := context.WithTimeout(ctx, 4*time.Minute)
+	defer cancel()
+	if err := tasks.RefreshTCPQualitySnapshots(refreshCtx); err != nil {
+		logger.Errorf("server", "Failed to refresh TCP quality snapshots: %v", err)
+	}
 }
 
 func compactMetricStore(ctx context.Context) {

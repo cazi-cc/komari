@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/komari-monitor/komari/database/clients"
 	"github.com/komari-monitor/komari/database/models"
+	"github.com/komari-monitor/komari/database/tasks"
 	v2 "github.com/komari-monitor/komari/protocol/v2"
 	"github.com/komari-monitor/komari/utils/notifier"
 	agent_runtime "github.com/komari-monitor/komari/web/agent"
@@ -75,6 +76,15 @@ func handleV2RPC(uuid string, req v2.Request, allowWait bool) v2.Response {
 		}
 		if err := ingestPingResult(uuid, params.TaskID, params.PingType, params.Value, probeDetailsFromV2(params.Details)); err != nil {
 			return v2.Error(req.ID, -32000, "failed to save ping result", err.Error())
+		}
+		return v2.Success(req.ID, gin.H{"status": "success"})
+	case v2.MethodAgentTCPQualityResult:
+		var params v2.TCPQualityResultParams
+		if err := bindV2Params(req.Params, &params); err != nil {
+			return v2.Error(req.ID, -32602, "invalid TCP quality result params", err.Error())
+		}
+		if err := tasks.SaveTCPQualityResult(uuid, params); err != nil {
+			return v2.Error(req.ID, -32000, "failed to save TCP quality result", err.Error())
 		}
 		return v2.Success(req.ID, gin.H{"status": "success"})
 	case v2.MethodAgentPull:

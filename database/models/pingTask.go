@@ -159,6 +159,93 @@ type TCPQualityCatalogCache struct {
 	LastSyncedAt time.Time `json:"last_synced_at" gorm:"index;not null"`
 }
 
+// UnlockQualityTask configures bounded application-layer checks. Endpoint
+// recipes are built into the Cazi agent; public APIs expose service labels only.
+type UnlockQualityTask struct {
+	Id                   uint        `json:"id,omitempty" gorm:"primaryKey;autoIncrement"`
+	Name                 string      `json:"name" gorm:"type:varchar(255);not null;index"`
+	Clients              StringArray `json:"clients" gorm:"type:longtext"`
+	DefaultOn            bool        `json:"default_on" gorm:"column:all_clients;not null;default:false"`
+	Enabled              bool        `json:"enabled" gorm:"not null;default:true"`
+	Service              string      `json:"service" gorm:"type:varchar(32);not null;default:'chatgpt'"`
+	Interval             int         `json:"interval" gorm:"type:int;not null;default:60"`
+	VerifyInterval       int         `json:"verify_interval" gorm:"type:int;not null;default:900"`
+	SampleCount          int         `json:"sample_count" gorm:"type:int;not null;default:1"`
+	TimeoutMS            int         `json:"timeout_ms" gorm:"type:int;not null;default:10000"`
+	ControlEnabled       bool        `json:"control_enabled" gorm:"not null;default:false"`
+	ControlDNS           string      `json:"control_dns,omitempty" gorm:"type:varchar(255)"`
+	FixedEnabled         bool        `json:"fixed_enabled" gorm:"not null;default:false"`
+	FixedAddress         string      `json:"fixed_address,omitempty" gorm:"type:varchar(255)"`
+	NotificationsEnabled bool        `json:"notifications_enabled" gorm:"not null;default:true"`
+	CreatedAt            time.Time   `json:"created_at"`
+	UpdatedAt            time.Time   `json:"updated_at"`
+}
+
+func (task UnlockQualityTask) AppliesToClient(uuid string) bool {
+	if uuid == "" {
+		return false
+	}
+	for _, client := range task.Clients {
+		if client == uuid {
+			return true
+		}
+	}
+	return false
+}
+
+// UnlockQualityRun stores extracted scoring columns plus a private compressed
+// diagnostic payload. No endpoint or address is copied into public snapshots.
+type UnlockQualityRun struct {
+	Id                    uint      `json:"-" gorm:"primaryKey;autoIncrement"`
+	TaskID                uint      `json:"task_id" gorm:"not null;index;uniqueIndex:idx_unlock_quality_run"`
+	Client                string    `json:"client" gorm:"type:varchar(36);not null;index;uniqueIndex:idx_unlock_quality_run"`
+	RunID                 string    `json:"run_id" gorm:"type:varchar(64);not null;uniqueIndex:idx_unlock_quality_run"`
+	Service               string    `json:"service" gorm:"type:varchar(32);not null;index"`
+	CatalogRevision       string    `json:"catalog_revision" gorm:"type:varchar(64);not null"`
+	RouteMode             string    `json:"route_mode" gorm:"type:varchar(16);not null;index"`
+	ProbeKind             string    `json:"probe_kind" gorm:"type:varchar(16);not null;index"`
+	Verdict               string    `json:"verdict" gorm:"type:varchar(32);not null;index"`
+	SamplesSent           int       `json:"samples_sent" gorm:"not null"`
+	SamplesReceived       int       `json:"samples_received" gorm:"not null"`
+	FailureRatio          float64   `json:"failure_ratio" gorm:"not null"`
+	DNSMS                 float64   `json:"dns_ms" gorm:"not null"`
+	ConnectMS             float64   `json:"connect_ms" gorm:"not null"`
+	TLSMS                 float64   `json:"tls_ms" gorm:"not null"`
+	TTFBP50MS             float64   `json:"ttfb_p50_ms" gorm:"not null"`
+	TTFBP95MS             float64   `json:"ttfb_p95_ms" gorm:"not null"`
+	TotalP50MS            float64   `json:"total_p50_ms" gorm:"not null"`
+	TotalP95MS            float64   `json:"total_p95_ms" gorm:"not null"`
+	JitterMS              float64   `json:"jitter_ms" gorm:"not null"`
+	HTTPStatusCode        int       `json:"http_status_code" gorm:"not null"`
+	HTTPStatusOKRatio     float64   `json:"http_status_ok_ratio" gorm:"not null"`
+	TCPRetransmissions    int       `json:"tcp_retransmissions" gorm:"not null"`
+	ResolvedAddressHash   string    `json:"-" gorm:"type:varchar(64)"`
+	ResolvedAddressFamily string    `json:"-" gorm:"type:varchar(16)"`
+	ExitCountry           string    `json:"exit_country,omitempty" gorm:"type:varchar(8)"`
+	EdgeColo              string    `json:"edge_colo,omitempty" gorm:"type:varchar(8)"`
+	Payload               string    `json:"-" gorm:"type:longtext;not null"`
+	FinishedAt            time.Time `json:"finished_at" gorm:"index;not null"`
+	CreatedAt             time.Time `json:"-"`
+}
+
+type UnlockQualitySnapshot struct {
+	TaskID      uint      `json:"task_id" gorm:"primaryKey;autoIncrement:false"`
+	WindowHours int       `json:"window_hours" gorm:"primaryKey;autoIncrement:false"`
+	Payload     string    `json:"-" gorm:"type:longtext;not null"`
+	GeneratedAt time.Time `json:"generated_at" gorm:"index;not null"`
+}
+
+type UnlockQualityAlertState struct {
+	TaskID         uint       `json:"-" gorm:"primaryKey;autoIncrement:false"`
+	Client         string     `json:"-" gorm:"primaryKey;type:varchar(36)"`
+	RouteMode      string     `json:"-" gorm:"primaryKey;type:varchar(16)"`
+	LastObserved   string     `json:"-" gorm:"type:varchar(32)"`
+	Consecutive    int        `json:"-" gorm:"not null;default:0"`
+	AlertActive    bool       `json:"-" gorm:"not null;default:false"`
+	LastNotifiedAt *time.Time `json:"-"`
+	UpdatedAt      time.Time  `json:"-"`
+}
+
 // AppliesToClient 判断当前 PingTask 是否适用于指定服务器。
 func (task PingTask) AppliesToClient(uuid string) bool {
 	if uuid == "" {

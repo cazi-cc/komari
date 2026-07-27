@@ -185,6 +185,9 @@ func registerScheduledWork() {
 	if err := tasks.ReloadTCPQualitySchedule(); err != nil {
 		logger.ErrorArgs("server", "Failed to reload TCP quality schedule:", err)
 	}
+	if err := tasks.ReloadUnlockQualitySchedule(); err != nil {
+		logger.ErrorArgs("server", "Failed to reload unlock quality schedule:", err)
+	}
 	if err := d_notification.ReloadLoadNotificationSchedule(); err != nil {
 		logger.ErrorArgs("server", "Failed to reload load notification schedule:", err)
 	}
@@ -199,6 +202,9 @@ func registerScheduledWork() {
 	}
 	if err := scheduler.AddContextFunc("tcp-quality:snapshots", "@every 5m", true, refreshTCPQualitySnapshots); err != nil {
 		logger.ErrorArgs("server", "Failed to add TCP quality snapshot refresh:", err)
+	}
+	if err := scheduler.AddContextFunc("unlock-quality:snapshots", "@every 1m", true, refreshUnlockQualitySnapshots); err != nil {
+		logger.ErrorArgs("server", "Failed to add unlock quality snapshot refresh:", err)
 	}
 	if err := scheduler.AddFunc("notifier:traffic", "@every 1m", notifier.CheckTraffic); err != nil {
 		logger.ErrorArgs("server", "Failed to add traffic notification task:", err)
@@ -219,6 +225,10 @@ func cleanupScheduledData() {
 	if err := tasks.ClearTCPQualityRunsBefore(before); err != nil {
 		logger.Errorf("server", "Failed to clean expired TCP quality runs: %v", err)
 	}
+	unlockBefore := time.Now().UTC().Add(-7 * 24 * time.Hour)
+	if err := tasks.ClearUnlockQualityRunsBefore(unlockBefore); err != nil {
+		logger.Errorf("server", "Failed to clean expired unlock quality runs: %v", err)
+	}
 	auditlog.RemoveOldLogs()
 	accounts.RemoveExpiredSessions()
 }
@@ -236,6 +246,14 @@ func refreshTCPQualitySnapshots(ctx context.Context) {
 	defer cancel()
 	if err := tasks.RefreshTCPQualitySnapshots(refreshCtx); err != nil {
 		logger.Errorf("server", "Failed to refresh TCP quality snapshots: %v", err)
+	}
+}
+
+func refreshUnlockQualitySnapshots(ctx context.Context) {
+	refreshCtx, cancel := context.WithTimeout(ctx, 50*time.Second)
+	defer cancel()
+	if err := tasks.RefreshUnlockQualitySnapshots(refreshCtx); err != nil {
+		logger.Errorf("server", "Failed to refresh unlock quality snapshots: %v", err)
 	}
 }
 

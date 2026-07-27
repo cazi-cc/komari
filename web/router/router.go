@@ -52,6 +52,8 @@ func registerPublicRoutes(r *gin.Engine) {
 	r.GET("/api/task/ping", jsonRpc.Bind("public:getPublicPingTasks"))
 	r.GET("/api/task/tcp-quality", jsonRpc.Bind("public:getPublicTCPQualityTasks"))
 	r.GET("/api/tcp-quality/snapshot", jsonRpc.Bind("public:getPublicTCPQualitySnapshot", jsonRpc.WithQuery("task_id", "hours")))
+	r.GET("/api/task/unlock-quality", jsonRpc.Bind("public:getPublicUnlockQualityTasks"))
+	r.GET("/api/unlock-quality/snapshot", jsonRpc.Bind("public:getPublicUnlockQualitySnapshot", jsonRpc.WithQuery("task_id", "hours")))
 
 	// JSON-RPC 直连入口。
 	r.GET("/api/rpc2", jsonRpc.OnRpcRequest)
@@ -244,5 +246,15 @@ func registerAdminRoutes(r *gin.Engine) {
 		tcpQuality.POST("/tasks/edit", jsonRpc.Bind("admin:editTCPQualityTask"))
 		tcpQuality.POST("/tasks/delete", jsonRpc.Bind("admin:deleteTCPQualityTasks"))
 		tcpQuality.POST("/snapshots/refresh", jsonRpc.Bind("admin:refreshTCPQualitySnapshots"))
+	}
+
+	unlockQuality := g.Group("/unlock-quality")
+	{
+		unlockQuality.GET("/tasks", jsonRpc.Bind("admin:getUnlockQualityTasks"))
+		unlockQuality.POST("/tasks/add", jsonRpc.Bind("admin:addUnlockQualityTask"))
+		unlockQuality.POST("/tasks/edit", jsonRpc.Bind("admin:editUnlockQualityTask"))
+		unlockQuality.POST("/tasks/delete", jsonRpc.Bind("admin:deleteUnlockQualityTasks"))
+		unlockQuality.POST("/tasks/run", jsonRpc.Bind("admin:runUnlockQualityTaskNow"))
+		unlockQuality.POST("/snapshots/refresh", jsonRpc.Bind("admin:refreshUnlockQualitySnapshots"))
 	}
 }

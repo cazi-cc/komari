@@ -87,6 +87,15 @@ func handleV2RPC(uuid string, req v2.Request, allowWait bool) v2.Response {
 			return v2.Error(req.ID, -32000, "failed to save TCP quality result", err.Error())
 		}
 		return v2.Success(req.ID, gin.H{"status": "success"})
+	case v2.MethodAgentUnlockQualityResult:
+		var params v2.UnlockQualityResultParams
+		if err := bindV2Params(req.Params, &params); err != nil {
+			return v2.Error(req.ID, -32602, "invalid unlock quality result params", err.Error())
+		}
+		if err := tasks.SaveUnlockQualityResult(uuid, params); err != nil {
+			return v2.Error(req.ID, -32000, "failed to save unlock quality result", err.Error())
+		}
+		return v2.Success(req.ID, gin.H{"status": "success"})
 	case v2.MethodAgentPull:
 		var params v2.PullParams
 		if err := bindV2Params(req.Params, &params); err != nil {

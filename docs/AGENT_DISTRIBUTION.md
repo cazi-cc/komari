@@ -36,6 +36,11 @@ it contains that node's current endpoint and token. For an existing Linux node:
 4. Verify `systemctl is-active komari-agent` and inspect recent logs with
    `journalctl -u komari-agent -n 50 --no-pager`.
 
+The ChatGPT unlock-quality task requires an Agent build that advertises the
+`unlock_quality` capability. Re-running the fork-owned one-click command is the
+supported upgrade path; changing only the backend cannot add this capability
+to an older Agent.
+
 Agents already on a `Snapshot-*` build check this fork at startup and every six
 hours. An upstream stable Agent does not automatically migrate to the fork, so
 it must be reinstalled once through the fork-owned one-click command. Never

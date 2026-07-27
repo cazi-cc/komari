@@ -13,6 +13,11 @@ This fork is the backend used by `ping.cazi.cc`.
   implementation.
 - `admin:getVisitorLogs` is administrator-only and returns structured visitor
   entries for the theme settings page.
+- Public TCP and unlock-quality snapshots contain labels and aggregate quality
+  metrics only. Probe domains, resolved addresses, DNS servers, fixed entries,
+  ports, and address fingerprints remain private.
+- Public analysis calls read server-generated snapshots and cannot dispatch an
+  Agent probe.
 - Audit logs are removed by Komari's existing 30-day cleanup task.
 
 The frontend must send only a route path without query parameters, tokens,

@@ -12,10 +12,11 @@ import (
 )
 
 const (
-	v2EventQueueLimit    = 128
-	v2EventTTL           = 5 * time.Minute
-	v2PingEventTTL       = 3 * time.Second
-	v2TCPQualityEventTTL = 30 * time.Minute
+	v2EventQueueLimit       = 128
+	v2EventTTL              = 5 * time.Minute
+	v2PingEventTTL          = 3 * time.Second
+	v2TCPQualityEventTTL    = 30 * time.Minute
+	v2UnlockQualityEventTTL = 2 * time.Minute
 )
 
 type v2EventQueue struct {
@@ -82,6 +83,8 @@ func EnqueueV2Event(uuid, method string, params any) v2.Event {
 		ttl = v2PingEventTTL
 	} else if method == v2.MethodAgentTCPQuality {
 		ttl = v2TCPQualityEventTTL
+	} else if method == v2.MethodAgentUnlockQuality {
+		ttl = v2UnlockQualityEventTTL
 	}
 	event := v2.Event{
 		ID:        newV2EventID(),
@@ -129,14 +132,21 @@ func coalesceV2EventLocked(q *v2EventQueue, event v2.Event) {
 }
 
 func v2EventCoalesceKey(event v2.Event) string {
-	if event.Method != v2.MethodAgentPing {
-		return ""
+	if event.Method == v2.MethodAgentPing {
+		var params v2.PingParams
+		if err := bindV2EventParams(event.Params, &params); err != nil || params.TaskID == 0 {
+			return ""
+		}
+		return fmt.Sprintf("%s:%d", event.Method, params.TaskID)
 	}
-	var params v2.PingParams
-	if err := bindV2EventParams(event.Params, &params); err != nil || params.TaskID == 0 {
-		return ""
+	if event.Method == v2.MethodAgentUnlockQuality {
+		var params v2.UnlockQualityParams
+		if err := bindV2EventParams(event.Params, &params); err != nil || params.TaskID == 0 {
+			return ""
+		}
+		return fmt.Sprintf("%s:%d:%s", event.Method, params.TaskID, params.RouteMode)
 	}
-	return fmt.Sprintf("%s:%d", event.Method, params.TaskID)
+	return ""
 }
 
 func bindV2EventParams(raw any, target any) error {

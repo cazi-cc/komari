@@ -3,8 +3,12 @@ package tasks
 import (
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/komari-monitor/komari/database/models"
+	"gorm.io/gorm/schema"
 )
 
 func TestUnlockQualityScoreGuards(t *testing.T) {
@@ -47,10 +51,10 @@ func TestUnlockQualityPublicSnapshotHasNoEndpointFields(t *testing.T) {
 
 func TestUnlockQualitySnapshotRefreshIntervals(t *testing.T) {
 	tests := map[int]time.Duration{
-		1:  time.Minute,
-		6:  5 * time.Minute,
-		24: 5 * time.Minute,
-		72: 15 * time.Minute,
+		1:   time.Minute,
+		6:   5 * time.Minute,
+		24:  5 * time.Minute,
+		72:  15 * time.Minute,
 		168: 15 * time.Minute,
 	}
 	for hours, expected := range tests {
@@ -68,5 +72,24 @@ func TestUnlockQualityAbnormalVerdictsShareOneSequence(t *testing.T) {
 	}
 	if unlockQualityVerdictAbnormal("available") || unlockQualityVerdictAbnormal("") {
 		t.Fatal("available and empty states must not be abnormal")
+	}
+}
+
+func TestUnlockQualityRunTTFBColumnNames(t *testing.T) {
+	parsed, err := schema.Parse(&models.UnlockQualityRun{}, &sync.Map{}, schema.NamingStrategy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for fieldName, want := range map[string]string{
+		"TTFBP50MS": unlockQualityTTFBP50Column,
+		"TTFBP95MS": unlockQualityTTFBP95Column,
+	} {
+		field := parsed.LookUpField(fieldName)
+		if field == nil {
+			t.Fatalf("field %s not found", fieldName)
+		}
+		if field.DBName != want {
+			t.Fatalf("%s database name = %q, want %q", fieldName, field.DBName, want)
+		}
 	}
 }

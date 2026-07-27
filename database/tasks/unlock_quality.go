@@ -25,6 +25,11 @@ import (
 
 const unlockQualityCatalogRevision = "chatgpt_v1"
 
+const (
+	unlockQualityTTFBP50Column = "ttfbp50_ms"
+	unlockQualityTTFBP95Column = "ttfbp95_ms"
+)
+
 func NormalizeUnlockQualityTask(task *models.UnlockQualityTask) error {
 	if task == nil {
 		return fmt.Errorf("task is required")
@@ -260,7 +265,7 @@ func SaveUnlockQualityResult(client string, params v2.UnlockQualityResultParams)
 		DoUpdates: clause.AssignmentColumns([]string{
 			"service", "catalog_revision", "route_mode", "probe_kind", "verdict",
 			"samples_sent", "samples_received", "failure_ratio", "dns_ms", "connect_ms",
-			"tls_ms", "ttfb_p50_ms", "ttfb_p95_ms", "total_p50_ms", "total_p95_ms",
+			"tls_ms", unlockQualityTTFBP50Column, unlockQualityTTFBP95Column, "total_p50_ms", "total_p95_ms",
 			"jitter_ms", "http_status_code", "http_status_ok_ratio", "tcp_retransmissions",
 			"resolved_address_hash", "resolved_address_family", "exit_country", "edge_colo",
 			"payload", "finished_at",
@@ -430,7 +435,7 @@ func ListUnlockQualityRuns(ctx context.Context, taskID uint, start time.Time) ([
 		Select(
 			"task_id", "client", "route_mode", "probe_kind", "verdict",
 			"samples_sent", "samples_received", "failure_ratio",
-			"dns_ms", "connect_ms", "tls_ms", "ttfb_p50_ms", "ttfb_p95_ms",
+			"dns_ms", "connect_ms", "tls_ms", unlockQualityTTFBP50Column, unlockQualityTTFBP95Column,
 			"total_p50_ms", "total_p95_ms", "jitter_ms", "http_status_ok_ratio",
 			"tcp_retransmissions", "exit_country", "edge_colo", "finished_at",
 		).

@@ -39,14 +39,14 @@ func getV2EventQueueLocked(uuid string) *v2EventQueue {
 }
 
 func DispatchV2Event(uuid, method string, params any) bool {
+	if !IsV2Client(uuid) {
+		return false
+	}
 	if conn := GetConnectedClients()[uuid]; conn != nil {
 		payload := v2.Request{JSONRPC: v2.Version, Method: method, Params: params}
 		if conn.WriteJSON(payload) == nil {
 			return true
 		}
-	}
-	if !IsV2Client(uuid) {
-		return false
 	}
 	EnqueueV2Event(uuid, method, params)
 	return true

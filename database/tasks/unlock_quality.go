@@ -215,6 +215,7 @@ func SaveUnlockQualityResult(client string, params v2.UnlockQualityResultParams)
 	if err := validateUnlockQualityResult(task, params); err != nil {
 		return err
 	}
+	verdict := normalizeUnlockQualityVerdict(params.Results, params.ProbeKind, params.Verdict)
 	payload, err := encodeUnlockQualityResults(params.Results)
 	if err != nil {
 		return err
@@ -236,7 +237,7 @@ func SaveUnlockQualityResult(client string, params v2.UnlockQualityResultParams)
 		CatalogRevision:       params.CatalogRevision,
 		RouteMode:             params.RouteMode,
 		ProbeKind:             params.ProbeKind,
-		Verdict:               params.Verdict,
+		Verdict:               verdict,
 		SamplesSent:           webResult.SamplesSent,
 		SamplesReceived:       webResult.SamplesReceived,
 		FailureRatio:          webResult.FailureRatio,
@@ -275,7 +276,7 @@ func SaveUnlockQualityResult(client string, params v2.UnlockQualityResultParams)
 	}
 	utils.CompleteUnlockQualityRun(params.TaskID, client, params.RouteMode, params.RunID)
 	if task.NotificationsEnabled && params.RouteMode == "system" && params.ProbeKind == "verify" {
-		go updateUnlockQualityAlert(task, client, params.Verdict, finishedAt)
+		go updateUnlockQualityAlert(task, client, verdict, finishedAt)
 	}
 	return nil
 }
@@ -346,6 +347,72 @@ func validUnlockQualityVerdict(value string) bool {
 	default:
 		return false
 	}
+}
+
+func normalizeUnlockQualityVerdict(results []v2.UnlockQualityEndpointResult, probeKind, fallback string) string {
+	if len(results) == 0 {
+		return fallback
+	}
+	normalized := make([]string, 0, len(results))
+	for _, result := range results {
+		verdict := normalizeUnlockQualityEndpointVerdict(result)
+		if verdict == "region_limited" {
+			return verdict
+		}
+		normalized = append(normalized, verdict)
+	}
+	if probeKind == "minute" {
+		for index, result := range results {
+			if result.EndpointKey == "web" {
+				return normalized[index]
+			}
+		}
+		return fallback
+	}
+	available, partial := 0, 0
+	for _, verdict := range normalized {
+		switch verdict {
+		case "available":
+			available++
+		case "partial":
+			partial++
+		}
+	}
+	if available >= 4 && available+partial == len(normalized) {
+		return "available"
+	}
+	if available > 0 || partial > 0 {
+		return "partial"
+	}
+	return "unavailable"
+}
+
+func normalizeUnlockQualityEndpointVerdict(result v2.UnlockQualityEndpointResult) string {
+	if result.Verdict == "region_limited" {
+		return result.Verdict
+	}
+	if result.SamplesReceived == 0 || result.HTTPStatusCode == 0 || result.HTTPStatusCode >= 500 {
+		return "unavailable"
+	}
+	switch result.EndpointKey {
+	case "api":
+		switch result.HTTPStatusCode {
+		case 200, 401, 403, 429:
+			return "available"
+		}
+	case "trace":
+		if result.HTTPStatusCode == 200 {
+			return "available"
+		}
+	case "web", "auth", "static":
+		if result.HTTPStatusCode >= 200 && result.HTTPStatusCode < 500 {
+			return "available"
+		}
+	}
+	if result.Verdict == "available" {
+		return result.Verdict
+	}
+	return "partial"
 }
 
 func validUnlockLocation(value string, length int) bool {

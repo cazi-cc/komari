@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/komari-monitor/komari/database/models"
+	v2 "github.com/komari-monitor/komari/protocol/v2"
 	"gorm.io/gorm/schema"
 )
 
@@ -30,6 +31,42 @@ func TestUnlockQualityScoreGuards(t *testing.T) {
 	score, _ = scoreUnlockQualityRoute(base)
 	if score > 39.9 {
 		t.Fatalf("region-limited score %.1f exceeds cap", score)
+	}
+}
+
+func TestNormalizeUnlockQualityProtectedResponses(t *testing.T) {
+	results := []v2.UnlockQualityEndpointResult{
+		{EndpointKey: "web", Verdict: "partial", SamplesReceived: 1, HTTPStatusCode: 403},
+		{EndpointKey: "auth", Verdict: "partial", SamplesReceived: 1, HTTPStatusCode: 403},
+		{EndpointKey: "api", Verdict: "available", SamplesReceived: 1, HTTPStatusCode: 401},
+		{EndpointKey: "static", Verdict: "partial", SamplesReceived: 1, HTTPStatusCode: 404},
+		{EndpointKey: "trace", Verdict: "available", SamplesReceived: 1, HTTPStatusCode: 200},
+	}
+	if got := normalizeUnlockQualityVerdict(results, "verify", "partial"); got != "available" {
+		t.Fatalf("normalized verdict = %q, want available", got)
+	}
+	results[2].Verdict = "region_limited"
+	results[2].HTTPStatusCode = 403
+	if got := normalizeUnlockQualityVerdict(results, "verify", "partial"); got != "region_limited" {
+		t.Fatalf("region-limited verdict = %q, want region_limited", got)
+	}
+}
+
+func TestNormalizeStoredUnlockQualityRun(t *testing.T) {
+	results := []v2.UnlockQualityEndpointResult{
+		{EndpointKey: "web", Verdict: "partial", SamplesReceived: 1, HTTPStatusCode: 403},
+		{EndpointKey: "auth", Verdict: "partial", SamplesReceived: 1, HTTPStatusCode: 403},
+		{EndpointKey: "api", Verdict: "available", SamplesReceived: 1, HTTPStatusCode: 401},
+		{EndpointKey: "static", Verdict: "partial", SamplesReceived: 1, HTTPStatusCode: 404},
+		{EndpointKey: "trace", Verdict: "available", SamplesReceived: 1, HTTPStatusCode: 200},
+	}
+	payload, err := encodeUnlockQualityResults(results)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := models.UnlockQualityRun{Verdict: "partial", ProbeKind: "verify", Payload: payload}
+	if got := normalizedUnlockQualityRunVerdict(run); got != "available" {
+		t.Fatalf("stored verdict = %q, want available", got)
 	}
 }
 

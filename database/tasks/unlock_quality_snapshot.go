@@ -63,21 +63,21 @@ type unlockQualityRouteSummary struct {
 }
 
 type unlockQualityScoreParts struct {
-	Unlock     float64 `json:"unlock"`
+	Unlock      float64 `json:"unlock"`
 	Reliability float64 `json:"reliability"`
-	TTFB       float64 `json:"ttfb"`
-	Transport  float64 `json:"transport"`
-	Stability  float64 `json:"stability"`
+	TTFB        float64 `json:"ttfb"`
+	Transport   float64 `json:"transport"`
+	Stability   float64 `json:"stability"`
 }
 
 type unlockQualityTrendPoint struct {
-	Time          time.Time `json:"time"`
-	TTFBP50MS     float64   `json:"ttfb_p50_ms"`
-	TTFBP95MS     float64   `json:"ttfb_p95_ms"`
-	TTFBMinMS     float64   `json:"ttfb_min_ms"`
-	TTFBMaxMS     float64   `json:"ttfb_max_ms"`
-	FailureCount  int       `json:"failure_count"`
-	SamplesSent   int       `json:"samples_sent"`
+	Time         time.Time `json:"time"`
+	TTFBP50MS    float64   `json:"ttfb_p50_ms"`
+	TTFBP95MS    float64   `json:"ttfb_p95_ms"`
+	TTFBMinMS    float64   `json:"ttfb_min_ms"`
+	TTFBMaxMS    float64   `json:"ttfb_max_ms"`
+	FailureCount int       `json:"failure_count"`
+	SamplesSent  int       `json:"samples_sent"`
 }
 
 func RefreshUnlockQualitySnapshots(ctx context.Context, force ...bool) error {
@@ -265,7 +265,7 @@ func summarizeUnlockQualityRoute(task models.UnlockQualityTask, routeMode string
 		summary.LatestAt = &at
 	}
 	if latestVerify != nil {
-		summary.Status = latestVerify.Verdict
+		summary.Status = normalizedUnlockQualityRunVerdict(*latestVerify)
 		summary.ExitCountry = latestVerify.ExitCountry
 		summary.EdgeColo = latestVerify.EdgeColo
 		if now.Sub(latestVerify.FinishedAt) > time.Duration(task.VerifyInterval*2+60)*time.Second {
@@ -300,6 +300,14 @@ func summarizeUnlockQualityRoute(task models.UnlockQualityTask, routeMode string
 	summary.Components = &parts
 	summary.Grade = unlockQualityGrade(score)
 	return summary
+}
+
+func normalizedUnlockQualityRunVerdict(run models.UnlockQualityRun) string {
+	results, err := DecodeUnlockQualityResults(run.Payload)
+	if err != nil {
+		return run.Verdict
+	}
+	return normalizeUnlockQualityVerdict(results, run.ProbeKind, run.Verdict)
 }
 
 func scoreUnlockQualityRoute(summary unlockQualityRouteSummary) (float64, unlockQualityScoreParts) {

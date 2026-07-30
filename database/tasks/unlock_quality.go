@@ -504,7 +504,7 @@ func ListUnlockQualityRuns(ctx context.Context, taskID uint, start time.Time) ([
 			"samples_sent", "samples_received", "failure_ratio",
 			"dns_ms", "connect_ms", "tls_ms", unlockQualityTTFBP50Column, unlockQualityTTFBP95Column,
 			"total_p50_ms", "total_p95_ms", "jitter_ms", "http_status_ok_ratio",
-			"tcp_retransmissions", "exit_country", "edge_colo", "finished_at",
+			"tcp_retransmissions", "exit_country", "edge_colo", "payload", "finished_at",
 		).
 		Where("task_id = ? AND finished_at >= ?", taskID, start.UTC()).
 		Order("finished_at ASC").

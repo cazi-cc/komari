@@ -17,12 +17,16 @@ import (
 	"github.com/komari-monitor/komari/pkg/rpc"
 )
 
-const defaultMetricQueryPoints = 500
+const (
+	defaultMetricQueryPoints       = 500
+	canonicalPingStatsSamplePoints = 4000
+)
 
 func init() {
 	regPublic("listMetricDefinitions", publicListMetricDefinitions, "List public metric definitions")
 	regPublic("queryMetrics", publicQueryMetrics, "Query metric points")
 	regPublic("getPingMetricStats", publicGetPingMetricStats, "Get ping metric statistics")
+	regPublic("getPingMetricWindowStats", publicGetPingMetricStats, "Get canonical ping statistics for a complete time window")
 }
 
 type publicMetricQueryParams struct {
@@ -118,8 +122,11 @@ type publicPingMetricTaskStats struct {
 	Max             *float64          `json:"max,omitempty"`
 	Avg             *float64          `json:"avg,omitempty"`
 	Latest          *float64          `json:"latest,omitempty"`
+	P005            *float64          `json:"p005,omitempty"`
 	P50             *float64          `json:"p50,omitempty"`
+	P95             *float64          `json:"p95,omitempty"`
 	P99             *float64          `json:"p99,omitempty"`
+	P995            *float64          `json:"p995,omitempty"`
 	StdDev          *float64          `json:"stddev,omitempty"`
 	P99P50Ratio     float64           `json:"p99_p50_ratio"`
 }
@@ -340,26 +347,24 @@ func publicGetPingMetricStats(ctx context.Context, req *rpc.JsonRpcRequest) (any
 	}
 	taskFilter := normalizePingMetricTaskIDs(params.TaskID, params.TaskIDs)
 
-	maxPoints := params.MaxPoints
-	if maxPoints == 0 {
-		maxPoints = params.DownsamplePoints
-	}
-	if maxPoints <= 0 {
-		maxPoints = defaultMetricQueryPoints
-	}
 	now := time.Now().UTC()
-	interval := metricDownsampleInterval(end.Sub(start), maxPoints)
+	interval := metric.FloorStandardInterval(
+		time.Duration((end.Sub(start).Nanoseconds() + canonicalPingStatsSamplePoints - 1) / canonicalPingStatsSamplePoints),
+	)
+	if interval < time.Second {
+		interval = time.Second
+	}
 	interval = store.CompatibleSeriesInterval(start, now, interval)
 
-	stats := make([]publicPingMetricTaskStats, 0)
-	for _, entityID := range entityIDs {
-		groups, err := loadPublicPingMetricAggregateGroups(ctx, store, entityID, start, end, interval, now)
-		if err != nil {
-			return nil, rpc.MakeError(rpc.InternalError, "Failed to query ping stats: "+err.Error(), nil)
-		}
-		entityStats := publicPingStatsFromAggregateGroups(entityID, groups, taskMap, taskFilter)
-		stats = append(stats, entityStats...)
+	records, err := metricstore.GetPingRecords(ctx, singleStringValue(entityIDs), singlePingMetricTaskID(taskFilter), start, end)
+	if err != nil {
+		return nil, rpc.MakeError(rpc.InternalError, "Failed to query ping latency snapshots: "+err.Error(), nil)
 	}
+	lossGroups, err := loadPublicPingLossWindow(ctx, store, entityIDs, taskFilter, start, end, now)
+	if err != nil {
+		return nil, rpc.MakeError(rpc.InternalError, "Failed to query ping loss statistics: "+err.Error(), nil)
+	}
+	stats := publicPingStatsFromSnapshots(records, lossGroups, entityIDs, taskMap, taskFilter)
 
 	sort.Slice(stats, func(i, j int) bool {
 		if stats[i].EntityID != stats[j].EntityID {
@@ -375,6 +380,221 @@ func publicGetPingMetricStats(ctx context.Context, req *rpc.JsonRpcRequest) (any
 		Stats:           stats,
 		Count:           len(stats),
 	}, nil
+}
+
+type publicPingMetricSeriesKey struct {
+	EntityID string
+	TaskID   string
+}
+
+type publicPingLatencySnapshots struct {
+	Values     []float64
+	Total      int
+	Latest     *float64
+	LatestTime time.Time
+}
+
+func singleStringValue(values []string) string {
+	if len(values) == 1 {
+		return values[0]
+	}
+	return ""
+}
+
+func singlePingMetricTaskID(taskFilter map[string]bool) int {
+	if len(taskFilter) != 1 {
+		return -1
+	}
+	for taskID := range taskFilter {
+		value, err := strconv.Atoi(taskID)
+		if err == nil {
+			return value
+		}
+	}
+	return -1
+}
+
+func loadPublicPingLossWindow(
+	ctx context.Context,
+	store *metric.Store,
+	entityIDs []string,
+	taskFilter map[string]bool,
+	start, end, now time.Time,
+) (map[publicPingMetricSeriesKey]metric.AggregatePoint, error) {
+	query := metric.Query{
+		MetricName: metricstore.MetricPingLoss,
+		EntityID:   singleStringValue(entityIDs),
+		Start:      start,
+		End:        end,
+		Order:      metric.OrderAsc,
+	}
+	if taskID := singlePingMetricTaskID(taskFilter); taskID >= 0 {
+		query.Tags = map[string]string{"task_id": strconv.Itoa(taskID)}
+	}
+
+	points, err := store.Series(ctx, metric.AggregateQuery{
+		Query:          query,
+		Aggregation:    metric.AggAvg,
+		Interval:       metricWindowAggregateInterval(end),
+		PreserveSeries: true,
+	}, now)
+	if err != nil {
+		return nil, err
+	}
+
+	allowedEntities := make(map[string]bool, len(entityIDs))
+	for _, entityID := range entityIDs {
+		allowedEntities[entityID] = true
+	}
+	out := make(map[publicPingMetricSeriesKey]metric.AggregatePoint)
+	for _, point := range points {
+		taskID := strings.TrimSpace(point.Tags["task_id"])
+		if !allowedEntities[point.EntityID] || taskID == "" {
+			continue
+		}
+		if len(taskFilter) > 0 && !taskFilter[taskID] {
+			continue
+		}
+		out[publicPingMetricSeriesKey{EntityID: point.EntityID, TaskID: taskID}] = point
+	}
+	return out, nil
+}
+
+func publicPingStatsFromSnapshots(
+	records []models.PingRecord,
+	lossGroups map[publicPingMetricSeriesKey]metric.AggregatePoint,
+	entityIDs []string,
+	taskMap map[string]models.PingTask,
+	taskFilter map[string]bool,
+) []publicPingMetricTaskStats {
+	allowedEntities := make(map[string]bool, len(entityIDs))
+	for _, entityID := range entityIDs {
+		allowedEntities[entityID] = true
+	}
+
+	latencyGroups := make(map[publicPingMetricSeriesKey]*publicPingLatencySnapshots)
+	keys := make(map[publicPingMetricSeriesKey]struct{})
+	for _, record := range records {
+		taskID := strconv.FormatUint(uint64(record.TaskId), 10)
+		key := publicPingMetricSeriesKey{EntityID: record.Client, TaskID: taskID}
+		if !allowedEntities[record.Client] || (len(taskFilter) > 0 && !taskFilter[taskID]) {
+			continue
+		}
+		group := latencyGroups[key]
+		if group == nil {
+			group = &publicPingLatencySnapshots{}
+			latencyGroups[key] = group
+		}
+		group.Total++
+		keys[key] = struct{}{}
+		if record.Value < 0 {
+			continue
+		}
+		value := float64(record.Value)
+		group.Values = append(group.Values, value)
+		if group.Latest == nil || record.Time.After(group.LatestTime) {
+			latest := value
+			group.Latest = &latest
+			group.LatestTime = record.Time
+		}
+	}
+	for key := range lossGroups {
+		keys[key] = struct{}{}
+	}
+
+	out := make([]publicPingMetricTaskStats, 0, len(keys))
+	for key := range keys {
+		group := latencyGroups[key]
+		if group == nil {
+			group = &publicPingLatencySnapshots{}
+		}
+		lossPoint, hasLoss := lossGroups[key]
+		total := group.Total
+		lossRate := 0.0
+		approximate := !hasLoss
+		valid := len(group.Values)
+		if hasLoss {
+			total = lossPoint.Count
+			lossFraction := math.Max(0, math.Min(1, lossPoint.Value))
+			lossRate = lossFraction * 100
+			valid = total - int(math.Round(lossFraction*float64(total)))
+			if valid < 0 {
+				valid = 0
+			}
+		} else if total > 0 {
+			lossRate = float64(total-valid) / float64(total) * 100
+		}
+		if total == 0 {
+			continue
+		}
+
+		stat := publicPingMetricTaskStats{
+			EntityID:        key.EntityID,
+			TaskID:          key.TaskID,
+			Tags:            map[string]string{"task_id": key.TaskID},
+			Total:           total,
+			Valid:           valid,
+			Loss:            lossRate,
+			LossApproximate: approximate,
+			Latest:          group.Latest,
+		}
+		if task, ok := taskMap[key.TaskID]; ok {
+			stat.Name = task.Name
+			stat.Type = task.Type
+			stat.Interval = task.Interval
+		}
+		if len(group.Values) > 0 {
+			sort.Float64s(group.Values)
+			stat.Min = float64Pointer(group.Values[0])
+			stat.Max = float64Pointer(group.Values[len(group.Values)-1])
+			stat.Avg = float64Pointer(averageFloat64(group.Values))
+			stat.P005 = float64Pointer(percentileFloat64(group.Values, 0.005))
+			stat.P50 = float64Pointer(percentileFloat64(group.Values, 0.50))
+			stat.P95 = float64Pointer(percentileFloat64(group.Values, 0.95))
+			stat.P99 = float64Pointer(percentileFloat64(group.Values, 0.99))
+			stat.P995 = float64Pointer(percentileFloat64(group.Values, 0.995))
+			stat.StdDev = float64Pointer(populationStdDev(group.Values))
+		}
+		if stat.P50 != nil && stat.P99 != nil && *stat.P50 > 0 && *stat.P99 >= *stat.P50 {
+			adjustedBase := math.Max(math.Min(*stat.P50, 50.0), 10.0)
+			stat.P99P50Ratio = (*stat.P99 - *stat.P50) / adjustedBase
+		}
+		out = append(out, stat)
+	}
+	return out
+}
+
+func float64Pointer(value float64) *float64 {
+	return &value
+}
+
+func averageFloat64(values []float64) float64 {
+	total := 0.0
+	for _, value := range values {
+		total += value
+	}
+	return total / float64(len(values))
+}
+
+func percentileFloat64(sortedValues []float64, percentile float64) float64 {
+	position := float64(len(sortedValues)-1) * math.Max(0, math.Min(1, percentile))
+	lower := int(math.Floor(position))
+	upper := int(math.Ceil(position))
+	if lower == upper {
+		return sortedValues[lower]
+	}
+	fraction := position - float64(lower)
+	return sortedValues[lower]*(1-fraction) + sortedValues[upper]*fraction
+}
+
+func populationStdDev(values []float64) float64 {
+	mean := averageFloat64(values)
+	sum := 0.0
+	for _, value := range values {
+		delta := value - mean
+		sum += delta * delta
+	}
+	return math.Sqrt(sum / float64(len(values)))
 }
 
 type publicMetricSeriesGroup struct {

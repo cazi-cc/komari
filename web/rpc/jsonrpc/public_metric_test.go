@@ -273,6 +273,67 @@ func TestPublicPingMetricStatsIncludesZeroVolatility(t *testing.T) {
 	}
 }
 
+func TestPublicPingStatsFromSnapshotsUsesSuccessfulLatencyAndDedicatedLoss(t *testing.T) {
+	base := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	taskMap := map[string]models.PingTask{
+		"1": {Id: 1, Name: "Fujian Mobile v6", Type: "icmp", Interval: 60},
+	}
+	records := []models.PingRecord{
+		{Client: "node-a", TaskId: 1, Time: base, Value: -1},
+		{Client: "node-a", TaskId: 1, Time: base.Add(time.Minute), Value: 100},
+		{Client: "node-a", TaskId: 1, Time: base.Add(2 * time.Minute), Value: 200},
+	}
+	lossGroups := map[publicPingMetricSeriesKey]metric.AggregatePoint{
+		{EntityID: "node-a", TaskID: "1"}: {
+			EntityID: "node-a",
+			Tags:     map[string]string{"task_id": "1"},
+			Count:    3,
+			Value:    0.125,
+		},
+	}
+
+	stats := publicPingStatsFromSnapshots(records, lossGroups, []string{"node-a"}, taskMap, nil)
+	if len(stats) != 1 {
+		t.Fatalf("expected one stat, got %#v", stats)
+	}
+	got := stats[0]
+	if got.Loss != 12.5 || got.LossApproximate {
+		t.Fatalf("loss must come from ping.loss: %#v", got)
+	}
+	if got.Avg == nil || *got.Avg != 150 || got.Min == nil || *got.Min != 100 {
+		t.Fatalf("failed latency sentinel must not affect successful latency stats: %#v", got)
+	}
+	if got.P50 == nil || *got.P50 != 150 || got.P95 == nil || *got.P95 != 195 || got.P99 == nil || *got.P99 != 199 {
+		t.Fatalf("unexpected latency percentiles: %#v", got)
+	}
+	if got.P005 == nil || *got.P005 != 100.5 || got.P995 == nil || *got.P995 != 199.5 {
+		t.Fatalf("unexpected robust latency range: %#v", got)
+	}
+	if got.Latest == nil || *got.Latest != 200 {
+		t.Fatalf("latest successful latency mismatch: %#v", got)
+	}
+}
+
+func TestPublicPingStatsFromSnapshotsFallsBackToCompleteFailureRatio(t *testing.T) {
+	base := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	records := []models.PingRecord{
+		{Client: "node-a", TaskId: 1, Time: base, Value: -1},
+		{Client: "node-a", TaskId: 1, Time: base.Add(time.Minute), Value: 40},
+	}
+
+	stats := publicPingStatsFromSnapshots(records, nil, []string{"node-a"}, nil, nil)
+	if len(stats) != 1 {
+		t.Fatalf("expected one stat, got %#v", stats)
+	}
+	got := stats[0]
+	if got.Loss != 50 || !got.LossApproximate {
+		t.Fatalf("legacy loss fallback mismatch: %#v", got)
+	}
+	if got.Avg == nil || *got.Avg != 40 {
+		t.Fatalf("legacy latency fallback mismatch: %#v", got)
+	}
+}
+
 func TestMetricDownsampleIntervalCeilsToStandardInterval(t *testing.T) {
 	got := metricDownsampleInterval(30*24*time.Hour, 500)
 	if got != 2*time.Hour {

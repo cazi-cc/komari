@@ -38,3 +38,12 @@ func TestTCPQualityTaskIDRejectsNonNumericString(t *testing.T) {
 		t.Fatal("BindParams() succeeded for a non-numeric task_id")
 	}
 }
+
+func TestFirstPublicTCPQualityICMPTaskIDIgnoresInvalidValues(t *testing.T) {
+	if got := firstPublicTCPQualityICMPTaskID([]string{"bad", "0", "42", "99"}); got != 42 {
+		t.Fatalf("icmp task id = %d, want 42", got)
+	}
+	if got := firstPublicTCPQualityICMPTaskID(nil); got != 0 {
+		t.Fatalf("empty ICMP task id = %d, want 0", got)
+	}
+}

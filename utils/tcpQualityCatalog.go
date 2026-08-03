@@ -56,6 +56,11 @@ type TCPQualityCatalogView struct {
 	TargetCount  int                       `json:"target_count"`
 }
 
+type TCPQualityAdminCatalogView struct {
+	TCPQualityCatalogView
+	Targets []v2.TCPQualityTarget `json:"targets"`
+}
+
 type TCPQualityTargetLabel struct {
 	Key          string `json:"key"`
 	Province     string `json:"province"`
@@ -73,6 +78,39 @@ type tcpQualityCatalogState struct {
 func GetTCPQualityCatalog(ctx context.Context, force bool) (TCPQualityCatalogView, error) {
 	state, err := loadTCPQualityCatalog(ctx, force)
 	return state.View, err
+}
+
+func GetTCPQualityAdminCatalog(ctx context.Context, force bool) (TCPQualityAdminCatalogView, error) {
+	state, err := loadTCPQualityCatalog(ctx, force)
+	if err != nil {
+		return TCPQualityAdminCatalogView{}, err
+	}
+	return TCPQualityAdminCatalogView{
+		TCPQualityCatalogView: state.View,
+		Targets:               append([]v2.TCPQualityTarget(nil), state.Targets...),
+	}, nil
+}
+
+func GetTCPQualityTaskTargets(ctx context.Context, task models.TCPQualityTask) ([]v2.TCPQualityTarget, string, error) {
+	catalog, err := loadTCPQualityCatalog(ctx, false)
+	if err != nil {
+		return nil, "", err
+	}
+	return selectTCPQualityTargets(task, catalog), catalog.View.Revision, nil
+}
+
+func GetTCPQualityCatalogTarget(ctx context.Context, key string) (v2.TCPQualityTarget, string, error) {
+	catalog, err := loadTCPQualityCatalog(ctx, false)
+	if err != nil {
+		return v2.TCPQualityTarget{}, "", err
+	}
+	key = strings.TrimSpace(key)
+	for _, target := range catalog.Targets {
+		if target.Key == key {
+			return target, catalog.View.Revision, nil
+		}
+	}
+	return v2.TCPQualityTarget{}, catalog.View.Revision, fmt.Errorf("TCP quality catalog target %q is unavailable", key)
 }
 
 func GetTCPQualityTargetLabels(ctx context.Context, task models.TCPQualityTask) ([]TCPQualityTargetLabel, string, error) {
@@ -304,6 +342,15 @@ func NormalizeTCPQualityTask(task *models.TCPQualityTask) (int, int, error) {
 		return 0, 0, fmt.Errorf("timeout_ms must be between 500 and 15000")
 	}
 	targetCount := len(task.ProvinceCodes) * len(task.ISPCode) * len(task.IPVersions)
+	if targetCount != 1 {
+		return targetCount, 0, fmt.Errorf("a scored TCP quality task must select exactly one catalog target")
+	}
+	if task.ICMPInterval == 0 {
+		task.ICMPInterval = 60
+	}
+	if task.ICMPInterval < 5 || task.ICMPInterval > 86400 {
+		return targetCount, 0, fmt.Errorf("icmp_interval must be between 5 and 86400 seconds")
+	}
 	packetCount := targetCount * task.StandardPackets
 	if task.LargeEnabled {
 		packetCount += targetCount * task.LargePackets

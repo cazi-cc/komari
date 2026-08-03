@@ -179,14 +179,11 @@ func (a *App) runCleanups(ctx context.Context) {
 }
 
 func registerScheduledWork() {
-	if err := tasks.ReloadPingSchedule(); err != nil {
-		logger.ErrorArgs("server", "Failed to reload ping schedule:", err)
+	if err := tasks.SyncTCPQualityICMPTargets(context.Background()); err != nil {
+		logger.Warnf("server", "Failed to reconcile TCP/ICMP task bindings: %v", err)
 	}
-	if err := tasks.ReloadTCPQualitySchedule(); err != nil {
-		logger.ErrorArgs("server", "Failed to reload TCP quality schedule:", err)
-	}
-	if err := tasks.ReloadUnlockQualitySchedule(); err != nil {
-		logger.ErrorArgs("server", "Failed to reload unlock quality schedule:", err)
+	if err := tasks.ReloadProbeSchedules(); err != nil {
+		logger.ErrorArgs("server", "Failed to reload probe schedules:", err)
 	}
 	if err := d_notification.ReloadLoadNotificationSchedule(); err != nil {
 		logger.ErrorArgs("server", "Failed to reload load notification schedule:", err)
@@ -225,6 +222,9 @@ func cleanupScheduledData() {
 	if err := tasks.ClearTCPQualityRunsBefore(before); err != nil {
 		logger.Errorf("server", "Failed to clean expired TCP quality runs: %v", err)
 	}
+	if err := tasks.ClearExpiredTCPQualityDiagnostics(time.Now().UTC()); err != nil {
+		logger.Errorf("server", "Failed to clean expired TCP quality diagnostics: %v", err)
+	}
 	unlockBefore := time.Now().UTC().Add(-7 * 24 * time.Hour)
 	if err := tasks.ClearUnlockQualityRunsBefore(unlockBefore); err != nil {
 		logger.Errorf("server", "Failed to clean expired unlock quality runs: %v", err)
@@ -238,6 +238,14 @@ func refreshTCPQualityCatalog(ctx context.Context) {
 	defer cancel()
 	if _, err := utils.GetTCPQualityCatalog(refreshCtx, true); err != nil {
 		logger.Errorf("server", "Failed to refresh TCP quality catalog: %v", err)
+		return
+	}
+	if err := tasks.SyncTCPQualityICMPTargets(refreshCtx); err != nil {
+		logger.Errorf("server", "Failed to sync managed ICMP targets: %v", err)
+		return
+	}
+	if err := tasks.ReloadProbeSchedules(); err != nil {
+		logger.Errorf("server", "Failed to reload schedules after catalog refresh: %v", err)
 	}
 }
 

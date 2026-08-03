@@ -30,33 +30,17 @@ func (m *PingTaskManager) Reload(pingTasks []models.PingTask) error {
 	scheduler.RemovePrefix("ping:")
 	m.tasks = make(map[int][]models.PingTask)
 
-	// 按Interval分组任务
-	taskGroups := make(map[int][]models.PingTask)
 	for _, task := range pingTasks {
 		if task.Interval <= 0 {
 			continue
 		}
-		taskGroups[task.Interval] = append(taskGroups[task.Interval], task)
-	}
-
-	// 为每个唯一的Interval创建协程
-	for interval, tasks := range taskGroups {
-		interval := interval
-		tasks := append([]models.PingTask(nil), tasks...)
-		m.tasks[interval] = tasks
-		taskIDs := make([]uint, 0, len(tasks))
-		for _, task := range tasks {
-			taskIDs = append(taskIDs, task.Id)
-		}
-		delays := probeScheduleDelays("ping", interval, taskIDs)
-		for _, task := range tasks {
-			task := task
-			name := fmt.Sprintf("ping:task:%d", task.Id)
-			if err := scheduler.AddContextFuncWithStartDelay(name, scheduler.Every(time.Duration(interval)*time.Second), delays[task.Id], func(ctx context.Context) {
-				executePingTask(ctx, task)
-			}); err != nil {
-				return err
-			}
+		m.tasks[task.Interval] = append(m.tasks[task.Interval], task)
+		task := task
+		name := fmt.Sprintf("ping:task:%d", task.Id)
+		if err := scheduler.AddContextFuncAtPhase(name, time.Duration(task.Interval)*time.Second, time.Duration(task.SchedulePhaseMS)*time.Millisecond, func(ctx context.Context) {
+			executePingTask(ctx, task)
+		}); err != nil {
+			return err
 		}
 	}
 	return nil

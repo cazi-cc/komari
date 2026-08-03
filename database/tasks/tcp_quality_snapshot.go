@@ -212,7 +212,7 @@ func buildTCPQualitySnapshot(ctx context.Context, task models.TCPQualityTask, ho
 		Targets:            labels,
 		ExcludedTargetKeys: sortedSetKeys(excludedTargets),
 		ScoreModel: tcpQualityScoreModel{
-			Version: "tcp-quality-v3",
+			Version: "tcp-quality-v4",
 			Weights: map[string]any{
 				"overall_with_large": map[string]float64{
 					"icmp": scoreConfig.OverallICMPWeight, "tcp_standard": scoreConfig.OverallStandardWeight,
@@ -496,7 +496,10 @@ func buildTCPQualitySnapshotNode(task models.TCPQualityTask, hours int, client m
 	if node.TCPStandardScore != nil {
 		tcpScore := *node.TCPStandardScore
 		if node.LargeScore != nil {
-			tcpScore = (*node.TCPStandardScore*55 + *node.LargeScore*10) / 65
+			tcpScore = weightedScore(
+				[2]float64{*node.TCPStandardScore, scoreConfig.OverallStandardWeight},
+				[2]float64{*node.LargeScore, scoreConfig.OverallLargeWeight},
+			)
 		}
 		tcpScore = applyTCPQualityLossGuard(tcpScore, node.Standard.LossPercent, scoreConfig)
 		tcpScore = roundScore(tcpScore)
@@ -520,16 +523,14 @@ func buildTCPQualitySnapshotNode(task models.TCPQualityTask, hours int, client m
 		overall = roundScore(overall)
 		node.OverallScore = &overall
 	}
-	node.Rankable = node.TCPScore != nil && (len(task.ICMPTaskIDs) == 0 || node.OverallScore != nil)
+	node.Rankable = node.OverallScore != nil
 	if !node.Rankable {
 		node.Reason = node.Standard.Reason
-		if len(task.ICMPTaskIDs) > 0 && node.ICMPScore == nil {
-			node.Reason = joinReason(node.Reason, "ICMP 参考任务数据不足")
+		if node.ICMPScore == nil {
+			node.Reason = joinReason(node.Reason, "ICMP 基础检测数据不足")
 		}
-	} else if node.OverallScore != nil {
-		node.Grade = tcpQualityGrade(*node.OverallScore, scoreConfig)
 	} else {
-		node.Grade = tcpQualityGrade(*node.TCPScore, scoreConfig)
+		node.Grade = tcpQualityGrade(*node.OverallScore, scoreConfig)
 	}
 	node.Trend = buildTCPQualityTrend(task, hours, client.UUID, observations)
 	return node

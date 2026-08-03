@@ -9,7 +9,6 @@ import (
 	"github.com/komari-monitor/komari/database/dbcore"
 	"github.com/komari-monitor/komari/database/metricstore"
 	"github.com/komari-monitor/komari/database/models"
-	"github.com/komari-monitor/komari/utils"
 	"gorm.io/gorm"
 )
 
@@ -22,13 +21,14 @@ func AddPingTask(clients []string, defaultOn bool, name string, target, taskType
 		return 0, err
 	}
 	task := models.PingTask{
-		Clients:     normalizedClients,
-		DefaultOn:   defaultOn,
-		Name:        name,
-		Type:        taskType,
-		Target:      target,
-		Interval:    interval,
-		ProbeConfig: normalizedConfig,
+		Clients:         normalizedClients,
+		DefaultOn:       defaultOn,
+		Name:            name,
+		Type:            taskType,
+		Target:          target,
+		Interval:        interval,
+		ProbeConfig:     normalizedConfig,
+		SchedulePhaseMS: -1,
 	}
 	err = db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&task).Error; err != nil {
@@ -49,30 +49,56 @@ func AddPingTask(clients []string, defaultOn bool, name string, target, taskType
 	if err != nil {
 		return 0, err
 	}
-	ReloadPingSchedule()
+	if err := ReloadProbeSchedules(); err != nil {
+		return task.Id, err
+	}
 	return task.Id, nil
 }
 
 func DeletePingTask(id []uint) error {
+	var linkedTCPIDs []uint
+	db := dbcore.GetDBInstance()
+	for _, pingID := range id {
+		var matches []models.TCPQualityTask
+		if err := db.Where("icmp_task_ids LIKE ?", `%"`+fmt.Sprint(pingID)+`"%`).Find(&matches).Error; err != nil {
+			return err
+		}
+		for _, match := range matches {
+			linkedTCPIDs = append(linkedTCPIDs, match.Id)
+		}
+	}
+	if len(linkedTCPIDs) > 0 {
+		if err := DeleteTCPQualityTasks(linkedTCPIDs); err != nil {
+			return err
+		}
+	}
 	// The metric store is independent from the main database, so clean it first
 	// to avoid leaving history that can no longer be addressed through the task.
 	if err := DeletePingRecords(id); err != nil {
 		return err
 	}
 
-	db := dbcore.GetDBInstance()
 	result := db.Where("id IN ?", id).Delete(&models.PingTask{})
 	if result.RowsAffected == 0 {
 		return gorm.ErrRecordNotFound
 	}
-	ReloadPingSchedule()
-	return result.Error
+	if result.Error != nil {
+		return result.Error
+	}
+	return ReloadProbeSchedules()
 }
 
 // EditPingTask 批量更新延迟监测任务配置。
 func EditPingTask(tasks []*models.PingTask) error {
 	db := dbcore.GetDBInstance()
 	for _, task := range tasks {
+		var existing models.PingTask
+		if err := db.Select("id", "managed_by_tcp_task").First(&existing, "id = ?", task.Id).Error; err != nil {
+			return err
+		}
+		if existing.ManagedByTCPTask > 0 {
+			return fmt.Errorf("ping task %d is managed by TCP quality task %d; edit the integrated task instead", task.Id, existing.ManagedByTCPTask)
+		}
 		task.Clients = normalizePingClients(task.Clients)
 		normalizedConfig, err := normalizeProbeConfig(task.Type, task.Interval, task.ProbeConfig)
 		if err != nil {
@@ -81,21 +107,22 @@ func EditPingTask(tasks []*models.PingTask) error {
 		task.ProbeConfig = normalizedConfig
 		// 使用 map 显式更新，避免 GORM struct Updates 跳过 false/0/空切片等零值。
 		updates := map[string]interface{}{
-			"name":         task.Name,
-			"clients":      task.Clients,
-			"all_clients":  task.DefaultOn,
-			"type":         task.Type,
-			"target":       task.Target,
-			"interval":     task.Interval,
-			"probe_config": task.ProbeConfig,
+			"name":              task.Name,
+			"clients":           task.Clients,
+			"all_clients":       task.DefaultOn,
+			"type":              task.Type,
+			"target":            task.Target,
+			"interval":          task.Interval,
+			"probe_config":      task.ProbeConfig,
+			"schedule_phase_ms": -1,
+			"schedule_interval": 0,
 		}
 		result := db.Model(&models.PingTask{}).Where("id = ?", task.Id).Updates(updates)
 		if result.RowsAffected == 0 {
 			return gorm.ErrRecordNotFound
 		}
 	}
-	ReloadPingSchedule()
-	return nil
+	return ReloadProbeSchedules()
 }
 
 func normalizeProbeConfig(taskType string, interval int, config models.ProbeConfig) (models.ProbeConfig, error) {
@@ -193,8 +220,7 @@ func UpdatePingTaskOrder(order map[uint]int) error {
 	if err != nil {
 		return err
 	}
-	ReloadPingSchedule()
-	return nil
+	return ReloadProbeSchedules()
 }
 
 // ping 记录已完全迁移到 metric store（指标 ping.latency_ms），运行期读写全部走
@@ -213,11 +239,7 @@ func DeleteAllPingRecords() error {
 }
 
 func ReloadPingSchedule() error {
-	pingTasks, err := GetAllPingTasks()
-	if err != nil {
-		return err
-	}
-	return utils.ReloadPingSchedule(pingTasks)
+	return ReloadProbeSchedules()
 }
 
 // AddDefaultOnClientUUID 在新客户端注册后，把该 UUID 追加到所有 default_on=true 的任务的 clients 中（去重）。
@@ -247,13 +269,15 @@ func AddDefaultOnClientUUID(uuid string) error {
 		}
 		next := append(models.StringArray{}, task.Clients...)
 		next = append(next, uuid)
-		if err := db.Model(&models.PingTask{}).Where("id = ?", task.Id).Update("clients", next).Error; err != nil {
+		if err := db.Model(&models.PingTask{}).Where("id = ?", task.Id).Updates(map[string]any{
+			"clients": next, "schedule_phase_ms": -1, "schedule_interval": 0,
+		}).Error; err != nil {
 			return err
 		}
 		changed = true
 	}
 	if changed {
-		return ReloadPingSchedule()
+		return ReloadProbeSchedules()
 	}
 	return nil
 }

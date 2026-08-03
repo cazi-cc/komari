@@ -92,6 +92,13 @@ func AddContextFuncWithStartDelay(name string, spec string, startDelay time.Dura
 	return defaultManager.AddContextFuncWithStartDelay(name, spec, startDelay, fn)
 }
 
+// AddContextFuncAtPhase anchors an interval job to UTC epoch time. Reloading
+// the scheduler therefore preserves the task's cadence instead of starting a
+// fresh interval from the reload time.
+func AddContextFuncAtPhase(name string, interval, phase time.Duration, fn Func) error {
+	return defaultManager.AddContextFuncAtPhase(name, interval, phase, fn)
+}
+
 func Every(duration time.Duration) string {
 	return "@every " + duration.String()
 }
@@ -121,6 +128,31 @@ func (m *Manager) AddContextFuncWithStartDelay(name string, spec string, startDe
 		return fmt.Errorf("corn job %q start delay must not be negative", name)
 	}
 	return m.addContextFunc(name, spec, false, startDelay, fn)
+}
+
+func (m *Manager) AddContextFuncAtPhase(name string, interval, phase time.Duration, fn Func) error {
+	if interval <= 0 {
+		return fmt.Errorf("corn job %q interval must be positive", name)
+	}
+	phase %= interval
+	if phase < 0 {
+		phase += interval
+	}
+	return m.addContextFunc(name, Every(interval), false, delayUntilPhase(time.Now(), interval, phase), fn)
+}
+
+func delayUntilPhase(now time.Time, interval, phase time.Duration) time.Duration {
+	if interval <= 0 {
+		return 0
+	}
+	current := time.Duration(now.UnixNano() % int64(interval))
+	delay := (phase - current + interval) % interval
+	// Next must be strictly in the future. This also prevents a schedule reload
+	// at the exact phase from dispatching the same task twice.
+	if delay < time.Millisecond {
+		delay += interval
+	}
+	return delay
 }
 
 func (m *Manager) addContextFunc(name string, spec string, runImmediately bool, startDelay time.Duration, fn Func) error {

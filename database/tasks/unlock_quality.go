@@ -108,6 +108,7 @@ func uniqueUnlockQualityStrings(values []string) models.StringArray {
 }
 
 func AddUnlockQualityTask(task *models.UnlockQualityTask) (uint, error) {
+	task.SchedulePhaseMS = -1
 	if err := NormalizeUnlockQualityTask(task); err != nil {
 		return 0, err
 	}
@@ -124,7 +125,7 @@ func AddUnlockQualityTask(task *models.UnlockQualityTask) (uint, error) {
 	if err := dbcore.GetDBInstance().Model(task).Updates(updates).Error; err != nil {
 		return task.Id, err
 	}
-	if err := ReloadUnlockQualitySchedule(); err != nil {
+	if err := ReloadProbeSchedules(); err != nil {
 		return task.Id, err
 	}
 	return task.Id, nil
@@ -152,6 +153,8 @@ func EditUnlockQualityTask(task *models.UnlockQualityTask) error {
 		"fixed_enabled":         task.FixedEnabled,
 		"fixed_address":         task.FixedAddress,
 		"notifications_enabled": task.NotificationsEnabled,
+		"schedule_phase_ms":     -1,
+		"schedule_interval":     0,
 	}
 	result := dbcore.GetDBInstance().Model(&models.UnlockQualityTask{}).Where("id = ?", task.Id).Updates(updates)
 	if result.Error != nil {
@@ -160,7 +163,7 @@ func EditUnlockQualityTask(task *models.UnlockQualityTask) error {
 	if result.RowsAffected == 0 {
 		return gorm.ErrRecordNotFound
 	}
-	return ReloadUnlockQualitySchedule()
+	return ReloadProbeSchedules()
 }
 
 func DeleteUnlockQualityTasks(ids []uint) error {
@@ -189,7 +192,7 @@ func DeleteUnlockQualityTasks(ids []uint) error {
 	}); err != nil {
 		return err
 	}
-	return ReloadUnlockQualitySchedule()
+	return ReloadProbeSchedules()
 }
 
 func GetAllUnlockQualityTasks() ([]models.UnlockQualityTask, error) {
@@ -517,11 +520,7 @@ func ClearUnlockQualityRunsBefore(before time.Time) error {
 }
 
 func ReloadUnlockQualitySchedule() error {
-	taskList, err := GetAllUnlockQualityTasks()
-	if err != nil {
-		return err
-	}
-	return utils.ReloadUnlockQualitySchedule(taskList)
+	return ReloadProbeSchedules()
 }
 
 func RunUnlockQualityTaskNow(ctx context.Context, id uint) error {
@@ -548,13 +547,15 @@ func AddDefaultUnlockQualityClientUUID(uuid string) error {
 		}
 		next := append(models.StringArray{}, task.Clients...)
 		next = append(next, uuid)
-		if err := db.Model(&models.UnlockQualityTask{}).Where("id = ?", task.Id).Update("clients", next).Error; err != nil {
+		if err := db.Model(&models.UnlockQualityTask{}).Where("id = ?", task.Id).Updates(map[string]any{
+			"clients": next, "schedule_phase_ms": -1, "schedule_interval": 0,
+		}).Error; err != nil {
 			return err
 		}
 		changed = true
 	}
 	if changed {
-		return ReloadUnlockQualitySchedule()
+		return ReloadProbeSchedules()
 	}
 	return nil
 }

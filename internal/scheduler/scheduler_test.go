@@ -65,3 +65,17 @@ func TestManagerStartDelayOnlyAppliesToFirstRun(t *testing.T) {
 		t.Fatal("timed out waiting for second run")
 	}
 }
+
+func TestDelayUntilPhaseUsesEpochAnchoredCadence(t *testing.T) {
+	interval := time.Minute
+	now := time.Unix(125, 250*int64(time.Millisecond))
+	phase := 10 * time.Second
+	if got, want := delayUntilPhase(now, interval, phase), 4*time.Second+750*time.Millisecond; got != want {
+		t.Fatalf("delay = %s, want %s", got, want)
+	}
+
+	exact := time.Unix(130, 0)
+	if got := delayUntilPhase(exact, interval, phase); got != interval {
+		t.Fatalf("exact phase delay = %s, want %s", got, interval)
+	}
+}

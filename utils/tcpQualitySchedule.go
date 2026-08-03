@@ -32,29 +32,16 @@ var tcpQualityManager = &tcpQualityTaskManager{
 
 func ReloadTCPQualitySchedule(taskList []models.TCPQualityTask) error {
 	scheduler.RemovePrefix("tcp-quality:task:")
-	groups := make(map[int][]models.TCPQualityTask)
 	for _, task := range taskList {
 		if !task.Enabled || task.Interval <= 0 {
 			continue
 		}
-		groups[task.Interval] = append(groups[task.Interval], task)
-	}
-	for interval, grouped := range groups {
-		interval := interval
-		grouped := append([]models.TCPQualityTask(nil), grouped...)
-		taskIDs := make([]uint, 0, len(grouped))
-		for _, task := range grouped {
-			taskIDs = append(taskIDs, task.Id)
-		}
-		delays := probeScheduleDelays("tcp-quality", interval, taskIDs)
-		for _, task := range grouped {
-			task := task
-			name := fmt.Sprintf("tcp-quality:task:%d", task.Id)
-			if err := scheduler.AddContextFuncWithStartDelay(name, scheduler.Every(time.Duration(interval)*time.Second), delays[task.Id], func(ctx context.Context) {
-				_ = ExecuteTCPQualityTask(ctx, task)
-			}); err != nil {
-				return err
-			}
+		task := task
+		name := fmt.Sprintf("tcp-quality:task:%d", task.Id)
+		if err := scheduler.AddContextFuncAtPhase(name, time.Duration(task.Interval)*time.Second, time.Duration(task.SchedulePhaseMS)*time.Millisecond, func(ctx context.Context) {
+			_ = ExecuteTCPQualityTask(ctx, task)
+		}); err != nil {
+			return err
 		}
 	}
 	return nil

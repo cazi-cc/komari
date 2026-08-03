@@ -81,38 +81,47 @@ type ProbeResultDetails struct {
 
 // PingTask 表示一次延迟监测任务配置。
 type PingTask struct {
-	Id          uint        `json:"id,omitempty" gorm:"primaryKey;autoIncrement"`
-	Weight      int         `json:"weight" gorm:"type:int;not null;default:0;index"`
-	Name        string      `json:"name" gorm:"type:varchar(255);not null;index"`
-	Clients     StringArray `json:"clients" gorm:"type:longtext"`
-	DefaultOn   bool        `json:"default_on" gorm:"column:all_clients;not null;default:false"` // 新加入的服务器是否自动开启此监测；现有服务器不受此字段影响
-	Type        string      `json:"type" gorm:"type:varchar(12);not null;default:'icmp'"`        // icmp tcp http
-	Target      string      `json:"target" gorm:"type:varchar(255);not null"`                    // Ping 目标地址
-	Interval    int         `json:"interval" gorm:"type:int;not null;default:60"`                // 间隔时间
-	ProbeConfig ProbeConfig `json:"probe_config,omitempty" gorm:"type:longtext;not null;default:'{}'"`
+	Id               uint        `json:"id,omitempty" gorm:"primaryKey;autoIncrement"`
+	Weight           int         `json:"weight" gorm:"type:int;not null;default:0;index"`
+	Name             string      `json:"name" gorm:"type:varchar(255);not null;index"`
+	Clients          StringArray `json:"clients" gorm:"type:longtext"`
+	DefaultOn        bool        `json:"default_on" gorm:"column:all_clients;not null;default:false"` // 新加入的服务器是否自动开启此监测；现有服务器不受此字段影响
+	Type             string      `json:"type" gorm:"type:varchar(12);not null;default:'icmp'"`        // icmp tcp http
+	Target           string      `json:"target" gorm:"type:varchar(255);not null"`                    // Ping 目标地址
+	Interval         int         `json:"interval" gorm:"type:int;not null;default:60"`                // 间隔时间
+	ProbeConfig      ProbeConfig `json:"probe_config,omitempty" gorm:"type:longtext;not null;default:'{}'"`
+	SchedulePhaseMS  int64       `json:"-" gorm:"not null;default:-1"`
+	ScheduleInterval int         `json:"-" gorm:"not null;default:0"`
+	ManagedByTCPTask uint        `json:"managed_by_tcp_task,omitempty" gorm:"not null;default:0;index"`
+	CatalogTargetKey string      `json:"catalog_target_key,omitempty" gorm:"type:varchar(96);not null;default:'';index"`
 }
 
 // TCPQualityTask configures scheduled raw TCP SYN quality probes. Targets are
 // selected by public catalog labels; concrete IP addresses and ports are never
 // stored in the task or exposed through public APIs.
 type TCPQualityTask struct {
-	Id              uint        `json:"id,omitempty" gorm:"primaryKey;autoIncrement"`
-	Name            string      `json:"name" gorm:"type:varchar(255);not null;index"`
-	Clients         StringArray `json:"clients" gorm:"type:longtext"`
-	DefaultOn       bool        `json:"default_on" gorm:"column:all_clients;not null;default:false"`
-	Enabled         bool        `json:"enabled" gorm:"not null;default:true"`
-	Interval        int         `json:"interval" gorm:"type:int;not null;default:900"`
-	ProvinceCodes   StringArray `json:"province_codes" gorm:"type:longtext"`
-	ISPCode         StringArray `json:"isp_codes" gorm:"column:isp_codes;type:longtext"`
-	IPVersions      StringArray `json:"ip_versions" gorm:"type:longtext"`
-	ICMPTaskIDs     StringArray `json:"icmp_task_ids" gorm:"type:longtext"`
-	StandardPackets int         `json:"standard_packets" gorm:"type:int;not null;default:30"`
-	LargeEnabled    bool        `json:"large_enabled" gorm:"not null;default:false"`
-	LargePackets    int         `json:"large_packets" gorm:"type:int;not null;default:30"`
-	DelayMS         int         `json:"delay_ms" gorm:"type:int;not null;default:200"`
-	TimeoutMS       int         `json:"timeout_ms" gorm:"type:int;not null;default:3000"`
-	CreatedAt       time.Time   `json:"created_at"`
-	UpdatedAt       time.Time   `json:"updated_at"`
+	Id               uint        `json:"id,omitempty" gorm:"primaryKey;autoIncrement"`
+	Name             string      `json:"name" gorm:"type:varchar(255);not null;index"`
+	Clients          StringArray `json:"clients" gorm:"type:longtext"`
+	DefaultOn        bool        `json:"default_on" gorm:"column:all_clients;not null;default:false"`
+	Enabled          bool        `json:"enabled" gorm:"not null;default:true"`
+	Interval         int         `json:"interval" gorm:"type:int;not null;default:900"`
+	ProvinceCodes    StringArray `json:"province_codes" gorm:"type:longtext"`
+	ISPCode          StringArray `json:"isp_codes" gorm:"column:isp_codes;type:longtext"`
+	IPVersions       StringArray `json:"ip_versions" gorm:"type:longtext"`
+	ICMPTaskIDs      StringArray `json:"icmp_task_ids" gorm:"type:longtext"`
+	StandardPackets  int         `json:"standard_packets" gorm:"type:int;not null;default:30"`
+	LargeEnabled     bool        `json:"large_enabled" gorm:"not null;default:false"`
+	LargePackets     int         `json:"large_packets" gorm:"type:int;not null;default:30"`
+	DelayMS          int         `json:"delay_ms" gorm:"type:int;not null;default:200"`
+	TimeoutMS        int         `json:"timeout_ms" gorm:"type:int;not null;default:3000"`
+	ICMPInterval     int         `json:"icmp_interval" gorm:"type:int;not null;default:60"`
+	SchedulePhaseMS  int64       `json:"-" gorm:"not null;default:-1"`
+	ScheduleInterval int         `json:"-" gorm:"not null;default:0"`
+	Diagnostic       bool        `json:"-" gorm:"not null;default:false;index"`
+	ExpiresAt        *time.Time  `json:"-" gorm:"index"`
+	CreatedAt        time.Time   `json:"created_at"`
+	UpdatedAt        time.Time   `json:"updated_at"`
 }
 
 func (task TCPQualityTask) AppliesToClient(uuid string) bool {
@@ -177,6 +186,8 @@ type UnlockQualityTask struct {
 	FixedEnabled         bool        `json:"fixed_enabled" gorm:"not null;default:false"`
 	FixedAddress         string      `json:"fixed_address,omitempty" gorm:"type:varchar(255)"`
 	NotificationsEnabled bool        `json:"notifications_enabled" gorm:"not null;default:true"`
+	SchedulePhaseMS      int64       `json:"-" gorm:"not null;default:-1"`
+	ScheduleInterval     int         `json:"-" gorm:"not null;default:0"`
 	CreatedAt            time.Time   `json:"created_at"`
 	UpdatedAt            time.Time   `json:"updated_at"`
 }

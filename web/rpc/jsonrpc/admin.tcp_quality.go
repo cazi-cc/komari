@@ -18,6 +18,8 @@ func init() {
 	regAdminTCPQuality("editTCPQualityTask", adminEditTCPQualityTask, "Edit a TCP quality task")
 	regAdminTCPQuality("deleteTCPQualityTasks", adminDeleteTCPQualityTasks, "Delete TCP quality tasks")
 	regAdminTCPQuality("runTCPQualityTaskNow", adminRunTCPQualityTaskNow, "Dispatch a TCP quality task now")
+	regAdminTCPQuality("runTCPQualityCatalogDiagnostic", adminRunTCPQualityCatalogDiagnostic, "Run one private catalog target diagnostic")
+	regAdminTCPQuality("getTCPQualityDiagnostics", adminGetTCPQualityDiagnostics, "List private TCP quality diagnostics retained for 24 hours")
 	regAdminTCPQuality("refreshTCPQualitySnapshots", adminRefreshTCPQualitySnapshots, "Rebuild TCP quality snapshots")
 }
 
@@ -29,7 +31,7 @@ func regAdminTCPQuality(name string, handler rpc.Handler, summary string) {
 }
 
 func adminGetTCPQualityCatalog(ctx context.Context, _ *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
-	catalog, err := utils.GetTCPQualityCatalog(ctx, false)
+	catalog, err := utils.GetTCPQualityAdminCatalog(ctx, false)
 	if err != nil {
 		return nil, rpc.MakeError(rpc.InternalError, err.Error(), nil)
 	}
@@ -37,8 +39,14 @@ func adminGetTCPQualityCatalog(ctx context.Context, _ *rpc.JsonRpcRequest) (any,
 }
 
 func adminRefreshTCPQualityCatalog(ctx context.Context, _ *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
-	catalog, err := utils.GetTCPQualityCatalog(ctx, true)
+	catalog, err := utils.GetTCPQualityAdminCatalog(ctx, true)
 	if err != nil {
+		return nil, rpc.MakeError(rpc.InternalError, err.Error(), nil)
+	}
+	if err := tasks.SyncTCPQualityICMPTargets(ctx); err != nil {
+		return nil, rpc.MakeError(rpc.InternalError, err.Error(), nil)
+	}
+	if err := tasks.ReloadProbeSchedules(); err != nil {
 		return nil, rpc.MakeError(rpc.InternalError, err.Error(), nil)
 	}
 	return catalog, nil
@@ -106,6 +114,30 @@ func adminRunTCPQualityTaskNow(ctx context.Context, req *rpc.JsonRpcRequest) (an
 		return nil, rpc.MakeError(rpc.InvalidParams, err.Error(), nil)
 	}
 	return map[string]any{"status": "dispatched"}, nil
+}
+
+func adminRunTCPQualityCatalogDiagnostic(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
+	var params struct {
+		TargetKey    string   `json:"target_key"`
+		Clients      []string `json:"clients"`
+		LargeEnabled bool     `json:"large_enabled"`
+	}
+	if err := req.BindParams(&params); err != nil {
+		return nil, rpc.MakeError(rpc.InvalidParams, err.Error(), nil)
+	}
+	id, err := tasks.RunTCPQualityCatalogDiagnostic(ctx, params.TargetKey, params.Clients, params.LargeEnabled)
+	if err != nil {
+		return nil, rpc.MakeError(rpc.InvalidParams, err.Error(), nil)
+	}
+	return map[string]any{"diagnostic_id": id, "status": "dispatched"}, nil
+}
+
+func adminGetTCPQualityDiagnostics(ctx context.Context, _ *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
+	result, err := tasks.ListTCPQualityDiagnostics(ctx)
+	if err != nil {
+		return nil, rpc.MakeError(rpc.InternalError, err.Error(), nil)
+	}
+	return result, nil
 }
 
 func parseTCPQualityWindow(value string) (int, bool) {

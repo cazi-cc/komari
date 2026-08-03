@@ -37,3 +37,38 @@ func TestAllocateTargetsSupportsTypedKeys(t *testing.T) {
 		t.Fatalf("allocateTargets() = %v, want map[7:3 9:2]", got)
 	}
 }
+
+func TestAllocateTargetsWithMinimumPreservesEachSeries(t *testing.T) {
+	groups := []allocationGroup[string]{
+		{key: "fast", length: 1000},
+		{key: "normal", length: 100},
+		{key: "slow", length: 12},
+	}
+
+	got := allocateTargetsWithMinimum(groups, 60, 10)
+	total := 0
+	for _, group := range groups {
+		if got[group.key] < 10 {
+			t.Fatalf("series %q target = %d, want at least 10; all=%v", group.key, got[group.key], got)
+		}
+		if got[group.key] > group.length {
+			t.Fatalf("series %q target = %d, exceeds length %d", group.key, got[group.key], group.length)
+		}
+		total += got[group.key]
+	}
+	if total != 60 {
+		t.Fatalf("allocated total = %d, want 60; all=%v", total, got)
+	}
+}
+
+func TestAllocateTargetsWithMinimumFallsBackWhenLimitIsTight(t *testing.T) {
+	groups := []allocationGroup[string]{
+		{key: "a", length: 20},
+		{key: "b", length: 20},
+	}
+
+	got := allocateTargetsWithMinimum(groups, 10, 10)
+	if got["a"]+got["b"] != 10 {
+		t.Fatalf("allocated total = %d, want 10; all=%v", got["a"]+got["b"], got)
+	}
+}

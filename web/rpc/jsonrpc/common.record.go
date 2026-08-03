@@ -387,32 +387,35 @@ func getRecords(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpc
 			maxCount = 4000
 		}
 		if maxCount != -1 && len(response.Records) > maxCount {
-			// group records by TaskId for proportional downsampling
-			taskGroups := make(map[uint][]RecordsResp)
+			// Preserve every node/task time series independently. Grouping only by
+			// task can sample away one node for an entire display bucket when many
+			// nodes report the same task at similar timestamps.
+			seriesGroups := make(map[pingRecordSeriesKey][]RecordsResp)
 			for _, r := range response.Records {
-				taskGroups[r.TaskId] = append(taskGroups[r.TaskId], r)
+				key := pingRecordSeriesKey{taskID: r.TaskId, client: r.Client}
+				seriesGroups[key] = append(seriesGroups[key], r)
 			}
 
-			// sort each group by time
-			for taskId := range taskGroups {
-				sort.Slice(taskGroups[taskId], func(i, j int) bool {
-					return taskGroups[taskId][i].Time.Before(taskGroups[taskId][j].Time)
+			// Sort each series before stratified sampling.
+			for key := range seriesGroups {
+				sort.Slice(seriesGroups[key], func(i, j int) bool {
+					return seriesGroups[key][i].Time.Before(seriesGroups[key][j].Time)
 				})
 			}
 
-			groupsMeta := make([]allocationGroup[uint], 0, len(taskGroups))
-			for taskId, records := range taskGroups {
-				groupsMeta = append(groupsMeta, allocationGroup[uint]{
-					key:    taskId,
+			groupsMeta := make([]allocationGroup[pingRecordSeriesKey], 0, len(seriesGroups))
+			for key, records := range seriesGroups {
+				groupsMeta = append(groupsMeta, allocationGroup[pingRecordSeriesKey]{
+					key:    key,
 					length: len(records),
 				})
 			}
-			targets := allocateTargets(groupsMeta, maxCount)
+			targets := allocateTargetsWithMinimum(groupsMeta, maxCount, minimumPingSeriesSamples)
 
-			// downsample each task group
+			// Downsample each node/task series across its complete time span.
 			downsampledRecords := make([]RecordsResp, 0, maxCount)
-			for taskId, records := range taskGroups {
-				targetCount := targets[taskId]
+			for key, records := range seriesGroups {
+				targetCount := targets[key]
 				sampled := sampleEvenly(records, targetCount)
 				downsampledRecords = append(downsampledRecords, sampled...)
 			}
@@ -449,6 +452,13 @@ type allocationGroup[K comparable] struct {
 	key    K
 	length int
 }
+
+type pingRecordSeriesKey struct {
+	taskID uint
+	client string
+}
+
+const minimumPingSeriesSamples = 10
 
 // allocateTargets splits maxTotal across groups proportionally to their lengths.
 func allocateTargets[K comparable](groups []allocationGroup[K], maxTotal int) map[K]int {
@@ -551,6 +561,41 @@ func allocateTargets[K comparable](groups []allocationGroup[K], maxTotal int) ma
 				}
 			}
 		}
+	}
+	return result
+}
+
+// allocateTargetsWithMinimum reserves a small baseline for every non-empty
+// series before distributing the remaining capacity proportionally. If the
+// global limit cannot cover the baseline, it falls back to proportional
+// allocation without exceeding maxTotal.
+func allocateTargetsWithMinimum[K comparable](groups []allocationGroup[K], maxTotal, minimum int) map[K]int {
+	if maxTotal < 0 || minimum <= 0 {
+		return allocateTargets(groups, maxTotal)
+	}
+
+	result := make(map[K]int, len(groups))
+	baseTotal := 0
+	remainingGroups := make([]allocationGroup[K], 0, len(groups))
+	for _, group := range groups {
+		base := min(group.length, minimum)
+		result[group.key] = base
+		baseTotal += base
+		remainingGroups = append(remainingGroups, allocationGroup[K]{
+			key:    group.key,
+			length: max(0, group.length-base),
+		})
+	}
+	if baseTotal > maxTotal {
+		return allocateTargets(groups, maxTotal)
+	}
+
+	remaining := maxTotal - baseTotal
+	if remaining == 0 {
+		return result
+	}
+	for key, extra := range allocateTargets(remainingGroups, remaining) {
+		result[key] += extra
 	}
 	return result
 }

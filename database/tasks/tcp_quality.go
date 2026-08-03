@@ -633,33 +633,48 @@ func SyncTCPQualityICMPTargets(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return dbcore.GetDBInstance().Transaction(func(tx *gorm.DB) error {
-		for index := range taskList {
-			task := &taskList[index]
-			if task.ICMPInterval <= 0 {
-				task.ICMPInterval = 60
-				if pingID := firstTCPQualityICMPTaskID(task.ICMPTaskIDs); pingID > 0 {
-					var linked models.PingTask
-					if err := tx.First(&linked, "id = ?", pingID).Error; err == nil && linked.Interval > 0 {
-						task.ICMPInterval = linked.Interval
-					}
+
+	type binding struct {
+		task   models.TCPQualityTask
+		target v2.TCPQualityTarget
+	}
+	bindings := make([]binding, 0, len(taskList))
+	db := dbcore.GetDBInstance()
+	for index := range taskList {
+		task := &taskList[index]
+		if task.ICMPInterval <= 0 {
+			task.ICMPInterval = 60
+			if pingID := firstTCPQualityICMPTaskID(task.ICMPTaskIDs); pingID > 0 {
+				var linked models.PingTask
+				if err := db.First(&linked, "id = ?", pingID).Error; err == nil && linked.Interval > 0 {
+					task.ICMPInterval = linked.Interval
 				}
 			}
-			targets, _, err := utils.GetTCPQualityTaskTargets(ctx, *task)
-			if err != nil {
-				return err
+		}
+		// Resolve the catalog before opening the write transaction. SQLite is
+		// configured with a single main-database connection, so a nested cache
+		// read from inside that transaction would wait for its own connection.
+		targets, _, err := utils.GetTCPQualityTaskTargets(ctx, *task)
+		if err != nil {
+			return err
+		}
+		if len(targets) != 1 {
+			// Legacy versions allowed a disabled task to contain several
+			// catalog targets. Keep that historical configuration inert until
+			// the administrator deletes it or edits it into the new one-target
+			// model; enabled tasks must always be unambiguous.
+			if !task.Enabled {
+				continue
 			}
-			if len(targets) != 1 {
-				// Legacy versions allowed a disabled task to contain several
-				// catalog targets. Keep that historical configuration inert until
-				// the administrator deletes it or edits it into the new one-target
-				// model; enabled tasks must always be unambiguous.
-				if !task.Enabled {
-					continue
-				}
-				return fmt.Errorf("TCP quality task %d must resolve to exactly one catalog target", task.Id)
-			}
-			pingID, err := syncManagedTCPQualityICMPTask(tx, task, targets[0], firstTCPQualityICMPTaskID(task.ICMPTaskIDs))
+			return fmt.Errorf("TCP quality task %d must resolve to exactly one catalog target", task.Id)
+		}
+		bindings = append(bindings, binding{task: *task, target: targets[0]})
+	}
+
+	return db.Transaction(func(tx *gorm.DB) error {
+		for index := range bindings {
+			task := &bindings[index].task
+			pingID, err := syncManagedTCPQualityICMPTask(tx, task, bindings[index].target, firstTCPQualityICMPTaskID(task.ICMPTaskIDs))
 			if err != nil {
 				return err
 			}

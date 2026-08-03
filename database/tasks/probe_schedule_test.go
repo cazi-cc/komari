@@ -31,6 +31,22 @@ func TestChooseProbePhaseCoordinatesHeavyFamilies(t *testing.T) {
 	}
 }
 
+func TestChooseProbePhaseVariesSubsecondOffset(t *testing.T) {
+	item := scheduledProbe{
+		key: "tcp-quality:subsecond", lane: "probe", intervalMS: 60000,
+		durationMS: 3000, clients: []string{"node-a"},
+	}
+	seedRemainder := int64(stableScheduleHash(item.key) % 1000)
+	occupied := (seedRemainder + 50) % 1000
+	phase := chooseProbePhase(item, []scheduledProbe{{
+		key: "ping:short-cycle", lane: "probe", intervalMS: 1000,
+		durationMS: 500, clients: []string{"node-a"}, phaseMS: &occupied,
+	}})
+	if distance := circularDistance(phase%1000, occupied, 1000); distance < 250 {
+		t.Fatalf("subsecond distance = %dms, want at least the 250ms guard", distance)
+	}
+}
+
 func TestChooseProbePhaseIgnoresUnrelatedClients(t *testing.T) {
 	occupied := int64(0)
 	item := scheduledProbe{key: "ping:9", lane: "probe", intervalMS: 60000, durationMS: 500, clients: []string{"node-b"}}

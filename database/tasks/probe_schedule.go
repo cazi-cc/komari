@@ -166,7 +166,7 @@ func chooseProbePhase(item scheduledProbe, placed []scheduledProbe) int64 {
 	bestMinimum := -1.0
 	bestPenalty := math.Inf(1)
 	for index := 0; index < candidateCount; index++ {
-		candidate := (int64(seed) + int64(index)*period/int64(candidateCount)) % period
+		candidate := probePhaseCandidate(item.key, period, int64(seed), index, candidateCount)
 		minimum := math.Inf(1)
 		penalty := 0.0
 		matched := false
@@ -196,6 +196,17 @@ func chooseProbePhase(item scheduledProbe, placed []scheduledProbe) int64 {
 		}
 	}
 	return bestPhase
+}
+
+func probePhaseCandidate(key string, period, seed int64, index, count int) int64 {
+	if index == 0 || count <= 1 {
+		return seed
+	}
+	bucketStart := int64(index) * period / int64(count)
+	bucketEnd := int64(index+1) * period / int64(count)
+	bucketWidth := max64(1, bucketEnd-bucketStart)
+	jitter := stableScheduleHash(fmt.Sprintf("%s:candidate:%d", key, index)) % uint64(bucketWidth)
+	return (seed + bucketStart + int64(jitter)) % period
 }
 
 func overlappingProbeClients(left, right []string) int {

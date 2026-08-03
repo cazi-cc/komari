@@ -44,12 +44,19 @@ func (m *PingTaskManager) Reload(pingTasks []models.PingTask) error {
 		interval := interval
 		tasks := append([]models.PingTask(nil), tasks...)
 		m.tasks[interval] = tasks
-		if err := scheduler.AddContextFunc(fmt.Sprintf("ping:%d", interval), scheduler.Every(time.Duration(interval)*time.Second), false, func(ctx context.Context) {
-			for _, task := range tasks {
-				go executePingTask(ctx, task)
+		taskIDs := make([]uint, 0, len(tasks))
+		for _, task := range tasks {
+			taskIDs = append(taskIDs, task.Id)
+		}
+		delays := probeScheduleDelays("ping", interval, taskIDs)
+		for _, task := range tasks {
+			task := task
+			name := fmt.Sprintf("ping:task:%d", task.Id)
+			if err := scheduler.AddContextFuncWithStartDelay(name, scheduler.Every(time.Duration(interval)*time.Second), delays[task.Id], func(ctx context.Context) {
+				executePingTask(ctx, task)
+			}); err != nil {
+				return err
 			}
-		}); err != nil {
-			return err
 		}
 	}
 	return nil

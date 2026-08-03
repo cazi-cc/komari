@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -31,5 +32,36 @@ func TestEverySchedulePreservesElapsedDuration(t *testing.T) {
 	after := time.Now()
 	if got := schedule.Next(after); got.Sub(after) != 90*time.Second {
 		t.Fatalf("interval = %s, want 90s", got.Sub(after))
+	}
+}
+
+func TestManagerStartDelayOnlyAppliesToFirstRun(t *testing.T) {
+	manager := NewManager()
+	t.Cleanup(manager.StopAll)
+	runs := make(chan time.Time, 2)
+	started := time.Now()
+	if err := manager.AddContextFuncWithStartDelay("delayed", "@every 40ms", 20*time.Millisecond, func(context.Context) {
+		runs <- time.Now()
+	}); err != nil {
+		t.Fatalf("add delayed job: %v", err)
+	}
+
+	var first time.Time
+	select {
+	case first = <-runs:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for first run")
+	}
+	if delay := first.Sub(started); delay < 15*time.Millisecond || delay > 200*time.Millisecond {
+		t.Fatalf("first delay = %s, want about 20ms", delay)
+	}
+
+	select {
+	case second := <-runs:
+		if interval := second.Sub(first); interval < 30*time.Millisecond || interval > 200*time.Millisecond {
+			t.Fatalf("repeat interval = %s, want about 40ms", interval)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for second run")
 	}
 }

@@ -18,6 +18,8 @@ This fork is the backend used by `ping.cazi.cc`.
   ports, and address fingerprints remain private.
 - Public analysis calls read server-generated snapshots and cannot dispatch an
   Agent probe.
+- Scheduled ping, TCP-quality, and unlock-quality tasks use stable phases that
+  spread tasks sharing an interval instead of dispatching them in one burst.
 - Audit logs are removed by Komari's existing 30-day cleanup task.
 
 The frontend must send only a route path without query parameters, tokens,

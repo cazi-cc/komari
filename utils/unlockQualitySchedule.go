@@ -37,16 +37,19 @@ func ReloadUnlockQualitySchedule(taskList []models.UnlockQualityTask) error {
 	for interval, grouped := range groups {
 		interval := interval
 		grouped := append([]models.UnlockQualityTask(nil), grouped...)
-		name := fmt.Sprintf("unlock-quality:task:%d", interval)
-		if err := scheduler.AddContextFunc(name, scheduler.Every(time.Duration(interval)*time.Second), true, func(ctx context.Context) {
-			for _, task := range grouped {
-				task := task
-				go func() {
-					_ = ExecuteUnlockQualityTask(ctx, task, false)
-				}()
+		taskIDs := make([]uint, 0, len(grouped))
+		for _, task := range grouped {
+			taskIDs = append(taskIDs, task.Id)
+		}
+		delays := probeScheduleDelays("unlock-quality", interval, taskIDs)
+		for _, task := range grouped {
+			task := task
+			name := fmt.Sprintf("unlock-quality:task:%d", task.Id)
+			if err := scheduler.AddContextFuncWithStartDelay(name, scheduler.Every(time.Duration(interval)*time.Second), delays[task.Id], func(ctx context.Context) {
+				_ = ExecuteUnlockQualityTask(ctx, task, false)
+			}); err != nil {
+				return err
 			}
-		}); err != nil {
-			return err
 		}
 	}
 	return nil

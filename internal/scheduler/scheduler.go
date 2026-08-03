@@ -84,6 +84,14 @@ func AddContextFunc(name string, spec string, runImmediately bool, fn Func) erro
 	return defaultManager.AddContextFunc(name, spec, runImmediately, fn)
 }
 
+// AddContextFuncWithStartDelay registers a periodic job whose first run is
+// delayed by startDelay. Later runs keep the interval defined by spec. This is
+// useful for spreading similar jobs across an interval without changing their
+// configured cadence.
+func AddContextFuncWithStartDelay(name string, spec string, startDelay time.Duration, fn Func) error {
+	return defaultManager.AddContextFuncWithStartDelay(name, spec, startDelay, fn)
+}
+
 func Every(duration time.Duration) string {
 	return "@every " + duration.String()
 }
@@ -105,6 +113,17 @@ func (m *Manager) AddFunc(name string, spec string, fn func()) error {
 }
 
 func (m *Manager) AddContextFunc(name string, spec string, runImmediately bool, fn Func) error {
+	return m.addContextFunc(name, spec, runImmediately, 0, fn)
+}
+
+func (m *Manager) AddContextFuncWithStartDelay(name string, spec string, startDelay time.Duration, fn Func) error {
+	if startDelay < 0 {
+		return fmt.Errorf("corn job %q start delay must not be negative", name)
+	}
+	return m.addContextFunc(name, spec, false, startDelay, fn)
+}
+
+func (m *Manager) addContextFunc(name string, spec string, runImmediately bool, startDelay time.Duration, fn Func) error {
 	if name == "" {
 		return fmt.Errorf("corn job name is empty")
 	}
@@ -119,7 +138,7 @@ func (m *Manager) AddContextFunc(name string, spec string, runImmediately bool, 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.replace(name, cancel)
 
-	go m.run(ctx, name, s, runImmediately, fn)
+	go m.run(ctx, name, s, runImmediately, startDelay, fn)
 	return nil
 }
 
@@ -165,12 +184,16 @@ func (m *Manager) replace(name string, cancel context.CancelFunc) {
 	m.jobs[name] = job{cancel: cancel}
 }
 
-func (m *Manager) run(ctx context.Context, name string, s schedule, runImmediately bool, fn Func) {
+func (m *Manager) run(ctx context.Context, name string, s schedule, runImmediately bool, startDelay time.Duration, fn Func) {
 	if runImmediately {
 		go safeRun(ctx, name, fn)
 	}
 
-	nextTick := s.Next(time.Now())
+	now := time.Now()
+	nextTick := s.Next(now)
+	if startDelay > 0 {
+		nextTick = now.Add(startDelay)
+	}
 	if nextTick.IsZero() {
 		logger.Warnf("scheduler", "corn job %s has no next run time", name)
 		return

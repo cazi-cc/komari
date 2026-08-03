@@ -42,16 +42,19 @@ func ReloadTCPQualitySchedule(taskList []models.TCPQualityTask) error {
 	for interval, grouped := range groups {
 		interval := interval
 		grouped := append([]models.TCPQualityTask(nil), grouped...)
-		name := fmt.Sprintf("tcp-quality:task:%d", interval)
-		if err := scheduler.AddContextFunc(name, scheduler.Every(time.Duration(interval)*time.Second), false, func(ctx context.Context) {
-			for _, task := range grouped {
-				task := task
-				go func() {
-					_ = ExecuteTCPQualityTask(ctx, task)
-				}()
+		taskIDs := make([]uint, 0, len(grouped))
+		for _, task := range grouped {
+			taskIDs = append(taskIDs, task.Id)
+		}
+		delays := probeScheduleDelays("tcp-quality", interval, taskIDs)
+		for _, task := range grouped {
+			task := task
+			name := fmt.Sprintf("tcp-quality:task:%d", task.Id)
+			if err := scheduler.AddContextFuncWithStartDelay(name, scheduler.Every(time.Duration(interval)*time.Second), delays[task.Id], func(ctx context.Context) {
+				_ = ExecuteTCPQualityTask(ctx, task)
+			}); err != nil {
+				return err
 			}
-		}); err != nil {
-			return err
 		}
 	}
 	return nil

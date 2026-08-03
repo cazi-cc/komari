@@ -31,6 +31,34 @@ func TestChooseProbePhaseCoordinatesHeavyFamilies(t *testing.T) {
 	}
 }
 
+func TestChooseProbePhaseCoordinatesAllClientTasks(t *testing.T) {
+	occupied := int64(10000)
+	phase := chooseProbePhase(scheduledProbe{
+		key: "tcp-quality:all", lane: "probe", intervalMS: 60000,
+		durationMS: 3000, allClients: true,
+	}, []scheduledProbe{{
+		key: "ping:all", lane: "probe", intervalMS: 60000,
+		durationMS: 500, allClients: true, phaseMS: &occupied,
+	}})
+	if distance := circularDistance(phase, occupied, 60000); distance < 29000 {
+		t.Fatalf("all-client task distance = %dms, want about half an interval", distance)
+	}
+}
+
+func TestChooseProbePhaseCoordinatesAllClientAndExplicitTask(t *testing.T) {
+	occupied := int64(10000)
+	phase := chooseProbePhase(scheduledProbe{
+		key: "unlock-quality:all", lane: "probe", intervalMS: 60000,
+		durationMS: 3000, allClients: true,
+	}, []scheduledProbe{{
+		key: "ping:node-a", lane: "probe", intervalMS: 60000,
+		durationMS: 500, clients: []string{"node-a"}, phaseMS: &occupied,
+	}})
+	if distance := circularDistance(phase, occupied, 60000); distance < 29000 {
+		t.Fatalf("all-client to explicit distance = %dms, want about half an interval", distance)
+	}
+}
+
 func TestChooseProbePhaseVariesSubsecondOffset(t *testing.T) {
 	item := scheduledProbe{
 		key: "tcp-quality:subsecond", lane: "probe", intervalMS: 60000,

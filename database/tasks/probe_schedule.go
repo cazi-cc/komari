@@ -25,6 +25,7 @@ type scheduledProbe struct {
 	intervalMS int64
 	durationMS int64
 	clients    []string
+	allClients bool
 	phaseMS    *int64
 	phaseFor   *int
 }
@@ -70,7 +71,8 @@ func ensureProbeSchedulePhases(pingTasks []models.PingTask, tcpTasks []models.TC
 		items = append(items, scheduledProbe{
 			key: fmt.Sprintf("ping:%d", task.Id), family: "ping", id: task.Id, lane: "probe",
 			intervalMS: int64(task.Interval) * 1000, durationMS: pingProbeDurationMS(*task),
-			clients: task.Clients, phaseMS: &task.SchedulePhaseMS, phaseFor: &task.ScheduleInterval,
+			clients: task.Clients, allClients: task.DefaultOn,
+			phaseMS: &task.SchedulePhaseMS, phaseFor: &task.ScheduleInterval,
 		})
 	}
 	for index := range tcpTasks {
@@ -81,7 +83,8 @@ func ensureProbeSchedulePhases(pingTasks []models.PingTask, tcpTasks []models.TC
 		items = append(items, scheduledProbe{
 			key: fmt.Sprintf("tcp-quality:%d", task.Id), family: "tcp-quality", id: task.Id, lane: "probe",
 			intervalMS: int64(task.Interval) * 1000, durationMS: tcpQualityDurationMS(*task),
-			clients: task.Clients, phaseMS: &task.SchedulePhaseMS, phaseFor: &task.ScheduleInterval,
+			clients: task.Clients, allClients: task.DefaultOn,
+			phaseMS: &task.SchedulePhaseMS, phaseFor: &task.ScheduleInterval,
 		})
 	}
 	for index := range unlockTasks {
@@ -92,7 +95,8 @@ func ensureProbeSchedulePhases(pingTasks []models.PingTask, tcpTasks []models.TC
 		items = append(items, scheduledProbe{
 			key: fmt.Sprintf("unlock-quality:%d", task.Id), family: "unlock-quality", id: task.Id, lane: "probe",
 			intervalMS: int64(task.Interval) * 1000, durationMS: unlockQualityDurationMS(*task),
-			clients: task.Clients, phaseMS: &task.SchedulePhaseMS, phaseFor: &task.ScheduleInterval,
+			clients: task.Clients, allClients: task.DefaultOn,
+			phaseMS: &task.SchedulePhaseMS, phaseFor: &task.ScheduleInterval,
 		})
 	}
 
@@ -174,7 +178,7 @@ func chooseProbePhase(item scheduledProbe, placed []scheduledProbe) int64 {
 			if item.lane != other.lane {
 				continue
 			}
-			overlap := overlappingProbeClients(item.clients, other.clients)
+			overlap := overlappingProbeClients(item, other)
 			if overlap == 0 {
 				continue
 			}
@@ -209,20 +213,39 @@ func probePhaseCandidate(key string, period, seed int64, index, count int) int64
 	return (seed + bucketStart + int64(jitter)) % period
 }
 
-func overlappingProbeClients(left, right []string) int {
-	seen := make(map[string]struct{}, len(left))
-	for _, client := range left {
+func overlappingProbeClients(left, right scheduledProbe) int {
+	seen := make(map[string]struct{}, len(left.clients))
+	for _, client := range left.clients {
 		if client != "" {
 			seen[client] = struct{}{}
 		}
 	}
 	count := 0
-	for _, client := range right {
+	for _, client := range right.clients {
 		if _, exists := seen[client]; exists {
 			count++
 		}
 	}
+	if left.allClients && right.allClients {
+		return probeMaxInt(1, count)
+	}
+	if left.allClients {
+		return probeMaxInt(count, uniqueProbeClients(right.clients))
+	}
+	if right.allClients {
+		return probeMaxInt(count, uniqueProbeClients(left.clients))
+	}
 	return count
+}
+
+func uniqueProbeClients(clients []string) int {
+	seen := make(map[string]struct{}, len(clients))
+	for _, client := range clients {
+		if client != "" {
+			seen[client] = struct{}{}
+		}
+	}
+	return len(seen)
 }
 
 func pingProbeDurationMS(task models.PingTask) int64 {

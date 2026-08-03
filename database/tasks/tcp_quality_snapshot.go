@@ -783,6 +783,9 @@ func tcpQualityMetricSeries(ctx context.Context, store *metric.Store, metricName
 
 func rankTCPQualityNodes(nodes []tcpQualitySnapshotNode) {
 	sort.SliceStable(nodes, func(i, j int) bool {
+		if nodes[i].Rankable != nodes[j].Rankable {
+			return nodes[i].Rankable
+		}
 		left, right := tcpQualityRankingScore(nodes[i]), tcpQualityRankingScore(nodes[j])
 		if left != right {
 			return left > right
@@ -793,18 +796,22 @@ func rankTCPQualityNodes(nodes []tcpQualitySnapshotNode) {
 		return nodes[i].Name < nodes[j].Name
 	})
 	rank := 0
+	rankedPosition := 0
 	var last *float64
 	for index := range nodes {
 		score := tcpQualityRankingScore(nodes[index])
 		if !nodes[index].Rankable || score < 0 {
+			nodes[index].Rank = nil
 			continue
 		}
+		rankedPosition++
 		if last == nil || math.Abs(score-*last) > 1e-9 {
-			rank = index + 1
+			rank = rankedPosition
 			value := score
 			last = &value
 		}
-		nodes[index].Rank = &rank
+		value := rank
+		nodes[index].Rank = &value
 	}
 }
 

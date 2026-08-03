@@ -51,7 +51,7 @@ jobs:
         run: |
           LDFLAGS="-s -w -X github.com/komari-monitor/komari/utils.CurrentVersion=cazi-privacy -X github.com/komari-monitor/komari/utils.VersionHash=${GITHUB_SHA}"
           go build -trimpath -ldflags="${LDFLAGS}" -o komari-linux-amd64
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: komari-linux-amd64
           path: komari-linux-amd64
@@ -61,7 +61,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: komari-linux-amd64
           path: .

@@ -11,6 +11,7 @@ import (
 	"github.com/komari-monitor/komari/database"
 	"github.com/komari-monitor/komari/database/auditlog"
 	"github.com/komari-monitor/komari/database/models"
+	messageevent "github.com/komari-monitor/komari/database/models/messageEvent"
 	"github.com/komari-monitor/komari/internal/config"
 	"github.com/komari-monitor/komari/utils/messageSender/factory"
 )
@@ -123,6 +124,11 @@ func SendEvent(event models.EventMessage) error {
 	if !cfg[config.NotificationEnabledKey].(bool) {
 		return nil
 	}
+	if enabled, err := eventNotificationEnabled(event.Event); err != nil {
+		return err
+	} else if !enabled {
+		return nil
+	}
 
 	// 检查提供者是否实现了 IEventMessageSender 接口
 	if eventSender, ok := CurrentProvider().(factory.IEventMessageSender); ok {
@@ -152,6 +158,35 @@ func SendEvent(event models.EventMessage) error {
 	}
 	auditlog.Log("", "", "Failed to send event message after 3 attempts: "+err.Error()+","+event.Event, "error")
 	return err
+}
+
+func eventNotificationEnabled(event string) (bool, error) {
+	key := notificationEventSettingKey(event)
+	if key == "" {
+		return true, nil
+	}
+	return config.GetAs[bool](key, true)
+}
+
+func notificationEventSettingKey(event string) string {
+	switch event {
+	case messageevent.Offline, messageevent.Online:
+		return config.NodeStatusNotificationEnabledKey
+	case messageevent.Expire:
+		return config.ExpireNotificationEnabledKey
+	case messageevent.Renew:
+		return config.RenewalNotificationEnabledKey
+	case messageevent.Login:
+		return config.LoginNotificationKey
+	case messageevent.Alert:
+		return config.LoadNotificationEnabledKey
+	case messageevent.Traffic:
+		return config.TrafficNotificationEnabledKey
+	case messageevent.DReport, messageevent.WReport, messageevent.MReport:
+		return config.TrafficReportNotificationEnabledKey
+	default:
+		return ""
+	}
 }
 
 func parseTemplate(messageTemplate string, event models.EventMessage) string {

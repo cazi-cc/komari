@@ -16,6 +16,7 @@ import (
 
 	"github.com/komari-monitor/komari/database/dbcore"
 	"github.com/komari-monitor/komari/database/models"
+	"github.com/komari-monitor/komari/internal/config"
 	v2 "github.com/komari-monitor/komari/protocol/v2"
 	"github.com/komari-monitor/komari/utils"
 	"github.com/komari-monitor/komari/utils/messageSender"
@@ -278,7 +279,8 @@ func SaveUnlockQualityResult(client string, params v2.UnlockQualityResultParams)
 		return err
 	}
 	utils.CompleteUnlockQualityRun(params.TaskID, client, params.RouteMode, params.RunID)
-	if task.NotificationsEnabled && params.RouteMode == "system" && params.ProbeKind == "verify" {
+	notificationsEnabled, _ := config.GetAs[bool](config.UnlockQualityNotificationEnabledKey, true)
+	if notificationsEnabled && task.NotificationsEnabled && params.RouteMode == "system" && params.ProbeKind == "verify" {
 		go updateUnlockQualityAlert(task, client, verdict, finishedAt)
 	}
 	return nil
@@ -570,7 +572,13 @@ func updateUnlockQualityAlert(task models.UnlockQualityTask, clientUUID, verdict
 		state.Consecutive = 1
 	}
 	state.LastObserved = verdict
-	if state.Consecutive < 2 {
+	consecutiveRounds, err := config.GetAs[int](config.UnlockQualityNotificationConsecutiveRoundsKey, 2)
+	if err != nil || consecutiveRounds < 1 {
+		consecutiveRounds = 2
+	} else if consecutiveRounds > 10 {
+		consecutiveRounds = 10
+	}
+	if state.Consecutive < consecutiveRounds {
 		_ = db.Save(&state).Error
 		return
 	}
@@ -593,10 +601,10 @@ func updateUnlockQualityAlert(task models.UnlockQualityTask, clientUUID, verdict
 	}
 	status := unlockQualityVerdictLabel(verdict)
 	title := "Komari ChatGPT 线路恢复"
-	message := fmt.Sprintf("%s 的 %s 已连续两轮恢复正常。", client.Name, task.Name)
+	message := fmt.Sprintf("%s 的 %s 已连续 %d 轮恢复正常。", client.Name, task.Name, consecutiveRounds)
 	if abnormal {
 		title = "Komari ChatGPT 线路异常"
-		message = fmt.Sprintf("%s 的 %s 已连续两轮异常，当前状态：%s。", client.Name, task.Name, status)
+		message = fmt.Sprintf("%s 的 %s 已连续 %d 轮异常，当前状态：%s。", client.Name, task.Name, consecutiveRounds, status)
 	}
 	_ = messageSender.SendTextMessage(message, title)
 }

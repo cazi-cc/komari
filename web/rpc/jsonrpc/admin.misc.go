@@ -135,6 +135,13 @@ func adminEditSettings(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.
 	if err := req.BindParams(&cfg); err != nil {
 		return nil, rpc.MakeError(rpc.InvalidParams, "Invalid or missing request body: "+err.Error(), nil)
 	}
+	if value, ok := cfg[config.UnlockQualityNotificationConsecutiveRoundsKey]; ok {
+		rounds := toInt(value, 0)
+		if rounds < 1 || rounds > 10 {
+			return nil, rpc.MakeError(rpc.InvalidParams, "Unlock quality notification consecutive rounds must be between 1 and 10", nil)
+		}
+		cfg[config.UnlockQualityNotificationConsecutiveRoundsKey] = rounds
+	}
 
 	// 若本次修改涉及 metrics 数据库配置，则在落库前先用「当前配置 + 本次改动」
 	// 合并出的目标配置做一次连接测试。metric store 始终启用，只要触及 metrics

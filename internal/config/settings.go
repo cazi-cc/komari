@@ -36,14 +36,21 @@ type Settings struct {
 	CustomBody string `json:"custom_body" default:""`
 
 	// 通知
-	NotificationEnabled        bool    `json:"notification_enabled" default:"true"` // 通知总开关
-	NotificationMethod         string  `json:"notification_method" default:"none"`
-	NotificationTemplate       string  `json:"notification_template" default:"{{emoji}}{{emoji}}{{emoji}}\nEvent: {{event}}\nClients: {{client}}\nMessage: {{message}}\nTime: {{time}}"`
-	ExpireNotificationEnabled  bool    `json:"expire_notification_enabled" default:"true"` // 是否启用过期通知
-	ExpireNotificationLeadDays int     `json:"expire_notification_lead_days" default:"7"`  // 过期前多少天通知，默认7天
-	LoginNotification          bool    `json:"login_notification" default:"true"`          // 登录通知
-	TrafficLimitPercentage     float64 `json:"traffic_limit_percentage" default:"80.00"`   // 流量限制百分比，默认80.00%
-	UpdatedAt                  time.Time
+	NotificationEnabled                        bool    `json:"notification_enabled" default:"true"` // 通知总开关
+	NotificationMethod                         string  `json:"notification_method" default:"none"`
+	NotificationTemplate                       string  `json:"notification_template" default:"{{emoji}}{{emoji}}{{emoji}}\nEvent: {{event}}\nClients: {{client}}\nMessage: {{message}}\nTime: {{time}}"`
+	ExpireNotificationEnabled                  bool    `json:"expire_notification_enabled" default:"true"` // 是否启用过期通知
+	ExpireNotificationLeadDays                 int     `json:"expire_notification_lead_days" default:"7"`  // 过期前多少天通知，默认7天
+	LoginNotification                          bool    `json:"login_notification" default:"true"`          // 登录通知
+	RenewalNotificationEnabled                 bool    `json:"renewal_notification_enabled" default:"true"`
+	NodeStatusNotificationEnabled              bool    `json:"node_status_notification_enabled" default:"true"`
+	LoadNotificationEnabled                    bool    `json:"load_notification_enabled" default:"true"`
+	TrafficNotificationEnabled                 bool    `json:"traffic_notification_enabled" default:"true"`
+	TrafficReportNotificationEnabled           bool    `json:"traffic_report_notification_enabled" default:"true"`
+	UnlockQualityNotificationEnabled           bool    `json:"unlock_quality_notification_enabled" default:"true"`
+	UnlockQualityNotificationConsecutiveRounds int     `json:"unlock_quality_notification_consecutive_rounds" default:"2"`
+	TrafficLimitPercentage                     float64 `json:"traffic_limit_percentage" default:"80.00"` // 流量限制百分比，默认80.00%
+	UpdatedAt                                  time.Time
 }
 
 const (
@@ -75,14 +82,21 @@ const (
 	CustomHeadKey                         = "custom_head"
 	CustomBodyKey                         = "custom_body"
 
-	NotificationEnabledKey        = "notification_enabled"
-	NotificationMethodKey         = "notification_method"
-	NotificationTemplateKey       = "notification_template"
-	ExpireNotificationEnabledKey  = "expire_notification_enabled"
-	ExpireNotificationLeadDaysKey = "expire_notification_lead_days"
-	LoginNotificationKey          = "login_notification"
-	TrafficLimitPercentageKey     = "traffic_limit_percentage"
-	UpdatedAtKey                  = "updated_at"
-	XtermjsSettingsKey            = "xtermjs_settings"
-	ThemeMarketSourcesKey         = "theme_market_sources"
+	NotificationEnabledKey                        = "notification_enabled"
+	NotificationMethodKey                         = "notification_method"
+	NotificationTemplateKey                       = "notification_template"
+	ExpireNotificationEnabledKey                  = "expire_notification_enabled"
+	ExpireNotificationLeadDaysKey                 = "expire_notification_lead_days"
+	LoginNotificationKey                          = "login_notification"
+	RenewalNotificationEnabledKey                 = "renewal_notification_enabled"
+	NodeStatusNotificationEnabledKey              = "node_status_notification_enabled"
+	LoadNotificationEnabledKey                    = "load_notification_enabled"
+	TrafficNotificationEnabledKey                 = "traffic_notification_enabled"
+	TrafficReportNotificationEnabledKey           = "traffic_report_notification_enabled"
+	UnlockQualityNotificationEnabledKey           = "unlock_quality_notification_enabled"
+	UnlockQualityNotificationConsecutiveRoundsKey = "unlock_quality_notification_consecutive_rounds"
+	TrafficLimitPercentageKey                     = "traffic_limit_percentage"
+	UpdatedAtKey                                  = "updated_at"
+	XtermjsSettingsKey                            = "xtermjs_settings"
+	ThemeMarketSourcesKey                         = "theme_market_sources"
 )

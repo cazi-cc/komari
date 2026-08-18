@@ -75,6 +75,14 @@ jobs:
               echo "$conflict_files"
               echo '```'
               echo
+              echo "## Fork-owned files to preserve"
+              echo
+              echo '```text'
+              echo '.github/workflows/notify-komari-web-release.yml'
+              echo '.github/workflows/sync-upstream.yml'
+              echo '.github/workflows/test-release-automation.yml'
+              echo '```'
+              echo
               echo "Do not merge this report-only commit. Resolve the upstream merge on this branch, delete this file, run the repository tests, and then update the pull request."
             } > .github/UPSTREAM_SYNC_CONFLICTS.md
             git add .github/UPSTREAM_SYNC_CONFLICTS.md
@@ -139,6 +147,14 @@ jobs:
           - Run the complete Go test suite.
           - Preserve the Komari Web release dispatch workflow.
           - Review every fork-owned automation file listed below.
+
+          Fork-owned files to preserve:
+
+          ```text
+          .github/workflows/notify-komari-web-release.yml
+          .github/workflows/sync-upstream.yml
+          .github/workflows/test-release-automation.yml
+          ```
           EOF
           )"
           if [ -n "${PROTECTED_CHANGES}" ]; then
@@ -163,7 +179,7 @@ jobs:
         run: |
           set -euo pipefail
           title="chore: resolve komari-monitor/komari upstream conflicts"
-          body="The automated upstream merge found conflicts. This branch currently contains a conflict report only and must not be merged as-is. Resolve the merge on this branch, preserve the cross-repository release dispatch workflow, delete the report, run all tests, and then update this pull request."
+          body="The automated upstream merge found conflicts. This branch currently contains a conflict report only and must not be merged as-is. Resolve the merge on this branch, review every fork-owned file listed in the report, delete the report, run all tests, and then update this pull request."
           if gh pr view "${SYNC_BRANCH}" --repo "${GITHUB_REPOSITORY}" --json number >/dev/null 2>&1; then
             gh pr edit "${SYNC_BRANCH}" --repo "${GITHUB_REPOSITORY}" --title "$title" --body "$body"
           else

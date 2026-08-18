@@ -98,21 +98,58 @@ jobs:
             exit 0
           fi
 
+          protected_changes="$(git diff --name-only "origin/${BASE_BRANCH}..HEAD" -- \
+            .github/workflows/notify-komari-web-release.yml \
+            .github/workflows/sync-upstream.yml \
+            .github/workflows/test-release-automation.yml)"
           go test ./...
           git push --force-with-lease origin "${SYNC_BRANCH}"
           {
             echo "needed=true"
             echo "ready=true"
             echo "conflict=false"
+            echo "protected_changes<<EOF"
+            echo "$protected_changes"
+            echo "EOF"
           } >> "$GITHUB_OUTPUT"
+
+          if [ -n "$protected_changes" ]; then
+            {
+              echo "## Fork-owned release automation changed"
+              echo
+              echo '```text'
+              echo "$protected_changes"
+              echo '```'
+              echo
+              echo "Review these files manually before merging."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Create or update the review pull request
         if: steps.sync.outputs.ready == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          PROTECTED_CHANGES: ${{ steps.sync.outputs.protected_changes }}
         run: |
           set -euo pipefail
-          body="Automated upstream merge. Review custom privacy, visitor-security and probe regression tests before merging."
+          body="$(cat <<'EOF'
+          Automated upstream merge. Review custom privacy, visitor-security, probe regression tests and cross-repository release automation before merging.
+
+          Required checks:
+          - Run the complete Go test suite.
+          - Preserve the Komari Web release dispatch workflow.
+          - Review every fork-owned automation file listed below.
+          EOF
+          )"
+          if [ -n "${PROTECTED_CHANGES}" ]; then
+            body="${body}
+
+          Fork-owned automation changed:
+
+          \`\`\`text
+          ${PROTECTED_CHANGES}
+          \`\`\`"
+          fi
           if gh pr view "${SYNC_BRANCH}" --repo "${GITHUB_REPOSITORY}" --json number >/dev/null 2>&1; then
             gh pr edit "${SYNC_BRANCH}" --repo "${GITHUB_REPOSITORY}" --title "${PR_TITLE}" --body "$body"
           else
@@ -126,7 +163,7 @@ jobs:
         run: |
           set -euo pipefail
           title="chore: resolve komari-monitor/komari upstream conflicts"
-          body="The automated upstream merge found conflicts. This branch currently contains a conflict report only and must not be merged as-is. Resolve the merge on this branch, delete the report, run all tests, and then update this pull request."
+          body="The automated upstream merge found conflicts. This branch currently contains a conflict report only and must not be merged as-is. Resolve the merge on this branch, preserve the cross-repository release dispatch workflow, delete the report, run all tests, and then update this pull request."
           if gh pr view "${SYNC_BRANCH}" --repo "${GITHUB_REPOSITORY}" --json number >/dev/null 2>&1; then
             gh pr edit "${SYNC_BRANCH}" --repo "${GITHUB_REPOSITORY}" --title "$title" --body "$body"
           else

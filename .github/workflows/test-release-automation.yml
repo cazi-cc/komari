@@ -1,0 +1,38 @@
+name: Test Release Automation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/notify-komari-web-release.yml"
+      - ".github/workflows/sync-upstream.yml"
+      - ".github/workflows/test-release-automation.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/notify-komari-web-release.yml"
+      - ".github/workflows/sync-upstream.yml"
+      - ".github/workflows/test-release-automation.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-automation-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate GitHub Actions workflows
+        run: >-
+          docker run --rm
+          -v "${PWD}:/repo"
+          -w /repo
+          rhysd/actionlint:1.7.12@sha256:9d36088643581e728c969f35141f88139fec77280b2be23c1f66f8e40e1025e7

@@ -1,0 +1,75 @@
+name: Notify Komari Web Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Stable Komari release tag to send to cazi-cc/komari-web."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: notify-komari-web-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (!github.event.release.draft &&
+      !github.event.release.prerelease &&
+      !startsWith(github.event.release.tag_name, 'Snapshot-'))
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ secrets.KOMARI_WEB_RELEASE_TOKEN }}
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      TARGET_REPOSITORY: cazi-cc/komari-web
+    steps:
+      - name: Dispatch release to Komari Web
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="$(printf '%s' "${RELEASE_TAG}" | xargs)"
+          if [ -z "$tag" ]; then
+            echo "A release tag is required." >&2
+            exit 1
+          fi
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            reason="KOMARI_WEB_RELEASE_TOKEN is not configured. The hourly Komari Web check will recover this release."
+            echo "::warning::$reason"
+            echo "$reason" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          payload="$(jq -n --arg tag "$tag" '{event_type:"komari-release-published",client_payload:{tag:$tag}}')"
+          dispatched=false
+          for attempt in 1 2 3 4 5; do
+            if gh api "repos/${TARGET_REPOSITORY}/dispatches" --method POST --input - <<< "$payload"; then
+              dispatched=true
+              break
+            fi
+            if [ "$attempt" -lt 5 ]; then
+              sleep "$((2 ** attempt))"
+            fi
+          done
+
+          if [ "$dispatched" != "true" ]; then
+            reason="GitHub could not notify ${TARGET_REPOSITORY} about ${tag} after five attempts. The hourly fallback will retry discovery."
+            echo "::warning::$reason"
+            echo "$reason" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          {
+            echo "### Komari Web release dispatch"
+            echo
+            echo "Sent \`${tag}\` to \`${TARGET_REPOSITORY}\`."
+            echo "The hourly release check remains enabled as a fallback."
+          } >> "$GITHUB_STEP_SUMMARY"

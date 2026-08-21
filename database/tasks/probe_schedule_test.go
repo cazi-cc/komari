@@ -1,6 +1,19 @@
 package tasks
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/komari-monitor/komari/database/models"
+)
+
+func TestUnlockQualityDurationAccountsForRelayRoute(t *testing.T) {
+	base := models.UnlockQualityTask{SampleCount: 1}
+	withRelay := base
+	withRelay.RelayEnabled = true
+	if unlockQualityDurationMS(withRelay) <= unlockQualityDurationMS(base) {
+		t.Fatal("relay route must increase the scheduler duration estimate")
+	}
+}
 
 func TestChooseProbePhaseUsesLargestSharedClientGap(t *testing.T) {
 	firstPhase := int64(0)

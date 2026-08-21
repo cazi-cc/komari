@@ -185,6 +185,9 @@ type UnlockQualityTask struct {
 	ControlDNS           string      `json:"control_dns,omitempty" gorm:"type:varchar(255)"`
 	FixedEnabled         bool        `json:"fixed_enabled" gorm:"not null;default:false"`
 	FixedAddress         string      `json:"fixed_address,omitempty" gorm:"type:varchar(255)"`
+	RelayEnabled         bool        `json:"relay_enabled" gorm:"not null;default:false"`
+	RelayClients         StringArray `json:"relay_clients" gorm:"type:longtext"`
+	RelayProxyURL        string      `json:"relay_proxy_url,omitempty" gorm:"type:varchar(1024)"`
 	NotificationsEnabled bool        `json:"notifications_enabled" gorm:"not null;default:true"`
 	SchedulePhaseMS      int64       `json:"-" gorm:"not null;default:-1"`
 	ScheduleInterval     int         `json:"-" gorm:"not null;default:0"`

@@ -31,6 +31,9 @@ type tcpQualityAggregate struct {
 	Sent       int
 	Received   int
 	Runs       int
+	MinSamples []weightedValue
+	MaxSamples []weightedValue
+	AvgSamples []weightedValue
 	P50Samples []weightedValue
 	P95Samples []weightedValue
 }
@@ -42,6 +45,9 @@ type weightedValue struct {
 
 type tcpQualityModeStats struct {
 	LossPercent     float64  `json:"loss_percent"`
+	Min             float64  `json:"min_ms"`
+	Max             float64  `json:"max_ms"`
+	Average         float64  `json:"average_ms"`
 	P50             float64  `json:"p50_ms"`
 	P95             float64  `json:"p95_ms"`
 	SamplesSent     int      `json:"samples_sent"`
@@ -60,10 +66,15 @@ type tcpQualityNodeTarget struct {
 }
 
 type tcpQualityTrendPoint struct {
-	Time        time.Time `json:"time"`
-	LossPercent float64   `json:"loss_percent"`
-	P50         float64   `json:"p50_ms"`
-	P95         float64   `json:"p95_ms"`
+	Time            time.Time `json:"time"`
+	LossPercent     float64   `json:"loss_percent"`
+	Min             float64   `json:"min_ms"`
+	Max             float64   `json:"max_ms"`
+	Average         float64   `json:"average_ms"`
+	P50             float64   `json:"p50_ms"`
+	P95             float64   `json:"p95_ms"`
+	SamplesSent     int       `json:"samples_sent"`
+	SamplesReceived int       `json:"samples_received"`
 }
 
 type tcpQualitySnapshotNode struct {
@@ -353,6 +364,9 @@ func aggregateTCPQualityObservations(task models.TCPQualityTask, hours int, obse
 		aggregate.Received += result.SamplesReceived
 		aggregate.Runs++
 		if result.SamplesReceived > 0 {
+			aggregate.MinSamples = append(aggregate.MinSamples, weightedValue{result.MinLatencyMS, result.SamplesReceived})
+			aggregate.MaxSamples = append(aggregate.MaxSamples, weightedValue{result.MaxLatencyMS, result.SamplesReceived})
+			aggregate.AvgSamples = append(aggregate.AvgSamples, weightedValue{result.AverageLatencyMS, result.SamplesReceived})
 			aggregate.P50Samples = append(aggregate.P50Samples, weightedValue{result.P50LatencyMS, result.SamplesReceived})
 			aggregate.P95Samples = append(aggregate.P95Samples, weightedValue{result.P95LatencyMS, result.SamplesReceived})
 		}
@@ -385,6 +399,9 @@ func aggregateTCPQualityObservations(task models.TCPQualityTask, hours int, obse
 		}
 		stats := &tcpQualityModeStats{
 			LossPercent:     roundScore(loss),
+			Min:             roundScore(weightedQuantile(aggregate.MinSamples, 0.05)),
+			Max:             roundScore(weightedQuantile(aggregate.MaxSamples, 0.95)),
+			Average:         roundScore(weightedMean(aggregate.AvgSamples)),
 			P50:             roundScore(weightedQuantile(aggregate.P50Samples, 0.50)),
 			P95:             roundScore(weightedQuantile(aggregate.P95Samples, 0.95)),
 			SamplesSent:     aggregate.Sent,
@@ -541,6 +558,9 @@ func accumulateModeStats(aggregate *tcpQualityAggregate, stats *tcpQualityModeSt
 	aggregate.Received += stats.SamplesReceived
 	aggregate.Runs += stats.Runs
 	if stats.SamplesReceived > 0 {
+		aggregate.MinSamples = append(aggregate.MinSamples, weightedValue{stats.Min, stats.SamplesReceived})
+		aggregate.MaxSamples = append(aggregate.MaxSamples, weightedValue{stats.Max, stats.SamplesReceived})
+		aggregate.AvgSamples = append(aggregate.AvgSamples, weightedValue{stats.Average, stats.SamplesReceived})
 		aggregate.P50Samples = append(aggregate.P50Samples, weightedValue{stats.P50, stats.SamplesReceived})
 		aggregate.P95Samples = append(aggregate.P95Samples, weightedValue{stats.P95, stats.SamplesReceived})
 	}
@@ -557,6 +577,9 @@ func profileModeStats(aggregate tcpQualityAggregate, scores []float64, validTarg
 	}
 	result := tcpQualityModeStats{
 		LossPercent:     roundScore(loss),
+		Min:             roundScore(weightedQuantile(aggregate.MinSamples, 0.05)),
+		Max:             roundScore(weightedQuantile(aggregate.MaxSamples, 0.95)),
+		Average:         roundScore(weightedMean(aggregate.AvgSamples)),
 		P50:             roundScore(weightedQuantile(aggregate.P50Samples, 0.50)),
 		P95:             roundScore(weightedQuantile(aggregate.P95Samples, 0.95)),
 		SamplesSent:     aggregate.Sent,
@@ -601,6 +624,9 @@ func buildTCPQualityTrend(task models.TCPQualityTask, hours int, uuid string, ob
 		aggregate.Sent += observation.Result.SamplesSent
 		aggregate.Received += observation.Result.SamplesReceived
 		if observation.Result.SamplesReceived > 0 {
+			aggregate.MinSamples = append(aggregate.MinSamples, weightedValue{observation.Result.MinLatencyMS, observation.Result.SamplesReceived})
+			aggregate.MaxSamples = append(aggregate.MaxSamples, weightedValue{observation.Result.MaxLatencyMS, observation.Result.SamplesReceived})
+			aggregate.AvgSamples = append(aggregate.AvgSamples, weightedValue{observation.Result.AverageLatencyMS, observation.Result.SamplesReceived})
 			aggregate.P50Samples = append(aggregate.P50Samples, weightedValue{observation.Result.P50LatencyMS, observation.Result.SamplesReceived})
 			aggregate.P95Samples = append(aggregate.P95Samples, weightedValue{observation.Result.P95LatencyMS, observation.Result.SamplesReceived})
 		}
@@ -618,10 +644,15 @@ func buildTCPQualityTrend(task models.TCPQualityTask, hours int, uuid string, ob
 			loss = float64(aggregate.Sent-aggregate.Received) * 100 / float64(aggregate.Sent)
 		}
 		result = append(result, tcpQualityTrendPoint{
-			Time:        time.Unix(key, 0).UTC(),
-			LossPercent: roundScore(loss),
-			P50:         roundScore(weightedQuantile(aggregate.P50Samples, 0.50)),
-			P95:         roundScore(weightedQuantile(aggregate.P95Samples, 0.95)),
+			Time:            time.Unix(key, 0).UTC(),
+			LossPercent:     roundScore(loss),
+			Min:             roundScore(weightedQuantile(aggregate.MinSamples, 0.05)),
+			Max:             roundScore(weightedQuantile(aggregate.MaxSamples, 0.95)),
+			Average:         roundScore(weightedMean(aggregate.AvgSamples)),
+			P50:             roundScore(weightedQuantile(aggregate.P50Samples, 0.50)),
+			P95:             roundScore(weightedQuantile(aggregate.P95Samples, 0.95)),
+			SamplesSent:     aggregate.Sent,
+			SamplesReceived: aggregate.Received,
 		})
 	}
 	if len(result) > 120 {

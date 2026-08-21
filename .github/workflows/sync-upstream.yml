@@ -81,6 +81,14 @@ jobs:
               echo '.github/workflows/notify-komari-web-release.yml'
               echo '.github/workflows/sync-upstream.yml'
               echo '.github/workflows/test-release-automation.yml'
+              echo 'protocol/v2/jsonrpc.go'
+              echo 'database/models/pingTask.go'
+              echo 'database/tasks/unlock_quality.go'
+              echo 'database/tasks/unlock_quality_snapshot.go'
+              echo 'database/tasks/tcp_quality_snapshot.go'
+              echo 'database/tasks/probe_schedule.go'
+              echo 'utils/unlockQualitySchedule.go'
+              echo 'docs/AGENT_DISTRIBUTION.md'
               echo '```'
               echo
               echo "Do not merge this report-only commit. Resolve the upstream merge on this branch, delete this file, run the repository tests, and then update the pull request."
@@ -109,7 +117,15 @@ jobs:
           protected_changes="$(git diff --name-only "origin/${BASE_BRANCH}..HEAD" -- \
             .github/workflows/notify-komari-web-release.yml \
             .github/workflows/sync-upstream.yml \
-            .github/workflows/test-release-automation.yml)"
+            .github/workflows/test-release-automation.yml \
+            protocol/v2/jsonrpc.go \
+            database/models/pingTask.go \
+            database/tasks/unlock_quality.go \
+            database/tasks/unlock_quality_snapshot.go \
+            database/tasks/tcp_quality_snapshot.go \
+            database/tasks/probe_schedule.go \
+            utils/unlockQualitySchedule.go \
+            docs/AGENT_DISTRIBUTION.md)"
           go test ./...
           git push --force-with-lease origin "${SYNC_BRANCH}"
           {
@@ -154,6 +170,14 @@ jobs:
           .github/workflows/notify-komari-web-release.yml
           .github/workflows/sync-upstream.yml
           .github/workflows/test-release-automation.yml
+          protocol/v2/jsonrpc.go
+          database/models/pingTask.go
+          database/tasks/unlock_quality.go
+          database/tasks/unlock_quality_snapshot.go
+          database/tasks/tcp_quality_snapshot.go
+          database/tasks/probe_schedule.go
+          utils/unlockQualitySchedule.go
+          docs/AGENT_DISTRIBUTION.md
           ```
           EOF
           )"

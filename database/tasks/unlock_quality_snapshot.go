@@ -34,8 +34,12 @@ type unlockQualitySnapshotNode struct {
 	Grade            string                     `json:"grade"`
 	System           unlockQualityRouteSummary  `json:"system"`
 	Control          *unlockQualityRouteSummary `json:"control,omitempty"`
+	Relay            *unlockQualityRouteSummary `json:"relay,omitempty"`
 	FixedDiagnostic  *unlockQualityRouteSummary `json:"fixed_diagnostic,omitempty"`
 	ImprovementScore *float64                   `json:"improvement_score,omitempty"`
+	RelayScoreGain   *float64                   `json:"relay_score_gain,omitempty"`
+	RelayTTFBGainMS  *float64                   `json:"relay_ttfb_gain_ms,omitempty"`
+	RelayFailureGain *float64                   `json:"relay_failure_gain_percent,omitempty"`
 }
 
 type unlockQualityRouteSummary struct {
@@ -201,6 +205,20 @@ func buildUnlockQualitySnapshot(task models.UnlockQualityTask, clients []models.
 			if system.Score != nil && control.Score != nil {
 				value := roundUnlockScore(*system.Score - *control.Score)
 				node.ImprovementScore = &value
+			}
+		}
+		if unlockQualityRelayApplies(task, client.UUID) {
+			relay := summarizeUnlockQualityRoute(task, "relay", routeRuns["relay"], hours, now)
+			node.Relay = &relay
+			if system.Score != nil && relay.Score != nil {
+				value := roundUnlockScore(*relay.Score - *system.Score)
+				node.RelayScoreGain = &value
+			}
+			if system.SamplesReceived > 0 && relay.SamplesReceived > 0 {
+				ttfbGain := roundUnlockMetric(system.TTFBP50MS - relay.TTFBP50MS)
+				failureGain := roundUnlockMetric(system.FailurePercent - relay.FailurePercent)
+				node.RelayTTFBGainMS = &ttfbGain
+				node.RelayFailureGain = &failureGain
 			}
 		}
 		if task.FixedEnabled {

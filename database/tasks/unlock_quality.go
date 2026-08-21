@@ -10,7 +10,9 @@ import (
 	"io"
 	"math"
 	"net"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,17 +66,68 @@ func NormalizeUnlockQualityTask(task *models.UnlockQualityTask) error {
 	}
 	task.ControlDNS = strings.TrimSpace(task.ControlDNS)
 	task.FixedAddress = strings.TrimSpace(task.FixedAddress)
+	task.RelayProxyURL = strings.TrimSpace(task.RelayProxyURL)
+	task.RelayClients = uniqueUnlockQualityStrings(task.RelayClients)
 	if task.ControlEnabled && !validUnlockQualityDNSServer(task.ControlDNS) {
 		return fmt.Errorf("control_dns must be an IP address with an optional port")
 	}
 	if task.FixedEnabled && net.ParseIP(task.FixedAddress) == nil {
 		return fmt.Errorf("fixed_address must be an IP address")
 	}
+	if task.RelayEnabled {
+		if !validUnlockQualityProxyURL(task.RelayProxyURL) {
+			return fmt.Errorf("relay_proxy_url must be an HTTP, HTTPS or SOCKS5 URL with an explicit port")
+		}
+		if len(task.RelayClients) == 0 {
+			return fmt.Errorf("at least one relay client is required when relay monitoring is enabled")
+		}
+		assigned := make(map[string]struct{}, len(task.Clients))
+		for _, client := range task.Clients {
+			assigned[client] = struct{}{}
+		}
+		for _, client := range task.RelayClients {
+			if _, ok := assigned[client]; !ok {
+				return fmt.Errorf("relay clients must also be assigned to the task")
+			}
+		}
+	}
 	if len(task.ControlDNS) > 255 || len(task.FixedAddress) > 255 ||
-		strings.ContainsAny(task.ControlDNS+task.FixedAddress, "\r\n\t") {
+		len(task.RelayProxyURL) > 1024 || strings.ContainsAny(task.ControlDNS+task.FixedAddress+task.RelayProxyURL, "\r\n\t") {
 		return fmt.Errorf("route configuration is invalid")
 	}
 	return nil
+}
+
+func validUnlockQualityProxyURL(value string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Hostname() == "" || parsed.Port() == "" || parsed.Fragment != "" || parsed.RawQuery != "" {
+		return false
+	}
+	if parsed.Path != "" && parsed.Path != "/" {
+		return false
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil || port < 1 || port > 65535 {
+		return false
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https", "socks5", "socks5h":
+		return true
+	default:
+		return false
+	}
+}
+
+func unlockQualityRelayApplies(task models.UnlockQualityTask, clientUUID string) bool {
+	if !task.RelayEnabled || clientUUID == "" {
+		return false
+	}
+	for _, client := range task.RelayClients {
+		if client == clientUUID {
+			return true
+		}
+	}
+	return false
 }
 
 func validUnlockQualityDNSServer(value string) bool {
@@ -121,6 +174,7 @@ func AddUnlockQualityTask(task *models.UnlockQualityTask) (uint, error) {
 		"enabled":               task.Enabled,
 		"control_enabled":       task.ControlEnabled,
 		"fixed_enabled":         task.FixedEnabled,
+		"relay_enabled":         task.RelayEnabled,
 		"notifications_enabled": task.NotificationsEnabled,
 	}
 	if err := dbcore.GetDBInstance().Model(task).Updates(updates).Error; err != nil {
@@ -153,6 +207,9 @@ func EditUnlockQualityTask(task *models.UnlockQualityTask) error {
 		"control_dns":           task.ControlDNS,
 		"fixed_enabled":         task.FixedEnabled,
 		"fixed_address":         task.FixedAddress,
+		"relay_enabled":         task.RelayEnabled,
+		"relay_clients":         task.RelayClients,
+		"relay_proxy_url":       task.RelayProxyURL,
 		"notifications_enabled": task.NotificationsEnabled,
 		"schedule_phase_ms":     -1,
 		"schedule_interval":     0,
@@ -216,7 +273,7 @@ func SaveUnlockQualityResult(client string, params v2.UnlockQualityResultParams)
 	if !task.Enabled || !task.AppliesToClient(client) {
 		return fmt.Errorf("unlock quality task is not assigned to this client")
 	}
-	if err := validateUnlockQualityResult(task, params); err != nil {
+	if err := validateUnlockQualityResult(task, client, params); err != nil {
 		return err
 	}
 	verdict := normalizeUnlockQualityVerdict(params.Results, params.ProbeKind, params.Verdict)
@@ -286,14 +343,15 @@ func SaveUnlockQualityResult(client string, params v2.UnlockQualityResultParams)
 	return nil
 }
 
-func validateUnlockQualityResult(task models.UnlockQualityTask, params v2.UnlockQualityResultParams) error {
+func validateUnlockQualityResult(task models.UnlockQualityTask, client string, params v2.UnlockQualityResultParams) error {
 	if params.TaskID == 0 || !validTCPQualityIdentifier(params.RunID, 64) ||
 		params.Service != task.Service || params.CatalogRevision != unlockQualityCatalogRevision {
 		return fmt.Errorf("invalid unlock quality identity")
 	}
 	if params.RouteMode != "system" &&
 		(params.RouteMode != "control" || !task.ControlEnabled) &&
-		(params.RouteMode != "fixed" || !task.FixedEnabled) {
+		(params.RouteMode != "fixed" || !task.FixedEnabled) &&
+		(params.RouteMode != "relay" || !unlockQualityRelayApplies(task, client)) {
 		return fmt.Errorf("route mode is not enabled for this task")
 	}
 	if params.ProbeKind != "minute" && params.ProbeKind != "verify" {

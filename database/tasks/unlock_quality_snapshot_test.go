@@ -73,16 +73,40 @@ func TestNormalizeStoredUnlockQualityRun(t *testing.T) {
 func TestUnlockQualityPublicSnapshotHasNoEndpointFields(t *testing.T) {
 	payload, err := json.Marshal(unlockQualitySnapshot{
 		TaskName: "ChatGPT", Service: "chatgpt",
-		Nodes: []unlockQualitySnapshotNode{{Name: "node", System: unlockQualityRouteSummary{RouteMode: "system"}}},
+		Nodes: []unlockQualitySnapshotNode{{
+			Name: "node", System: unlockQualityRouteSummary{RouteMode: "system"},
+			Relay: &unlockQualityRouteSummary{RouteMode: "relay"},
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	lower := strings.ToLower(string(payload))
-	for _, forbidden := range []string{`"ip"`, `"address"`, `"domain"`, `"url"`, `"dns_server"`, `"fixed_address"`, `"hostname"`, `"port"`} {
+	for _, forbidden := range []string{`"ip"`, `"address"`, `"domain"`, `"url"`, `"proxy"`, `"dns_server"`, `"fixed_address"`, `"hostname"`, `"port"`} {
 		if strings.Contains(lower, forbidden) {
 			t.Fatalf("public snapshot contains forbidden field %s: %s", forbidden, payload)
 		}
+	}
+}
+
+func TestNormalizeUnlockQualityRelayTask(t *testing.T) {
+	task := models.UnlockQualityTask{
+		Name: "ChatGPT", Service: "chatgpt", Interval: 60, VerifyInterval: 900,
+		SampleCount: 1, TimeoutMS: 10000, Clients: models.StringArray{"node-a"},
+		RelayEnabled: true, RelayClients: models.StringArray{"node-a"},
+		RelayProxyURL: "socks5://user:secret@127.0.0.1:1080",
+	}
+	if err := NormalizeUnlockQualityTask(&task); err != nil {
+		t.Fatalf("valid relay task rejected: %v", err)
+	}
+	task.RelayClients = models.StringArray{"node-b"}
+	if err := NormalizeUnlockQualityTask(&task); err == nil {
+		t.Fatal("relay client outside task assignment must be rejected")
+	}
+	task.RelayClients = models.StringArray{"node-a"}
+	task.RelayProxyURL = "ftp://127.0.0.1:21"
+	if err := NormalizeUnlockQualityTask(&task); err == nil {
+		t.Fatal("unsupported relay scheme must be rejected")
 	}
 }
 

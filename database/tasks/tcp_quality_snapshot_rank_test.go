@@ -1,6 +1,41 @@
 package tasks
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"github.com/komari-monitor/komari/database/models"
+	v2 "github.com/komari-monitor/komari/protocol/v2"
+)
+
+func TestTCPQualityTrendUsesRobustMaximum(t *testing.T) {
+	finishedAt := time.Now().UTC().Truncate(time.Minute)
+	observations := make([]tcpQualityObservation, 0, 20)
+	for index := 0; index < 20; index++ {
+		maximum := 30.0
+		if index == 19 {
+			maximum = 1000
+		}
+		observations = append(observations, tcpQualityObservation{
+			Client: "node-a", FinishedAt: finishedAt,
+			Result: v2.TCPQualityTargetResult{
+				Mode: "standard", SamplesSent: 1, SamplesReceived: 1,
+				MinLatencyMS: 10, MaxLatencyMS: maximum, AverageLatencyMS: 20,
+				P50LatencyMS: 20, P95LatencyMS: 28,
+			},
+		})
+	}
+	trend := buildTCPQualityTrend(models.TCPQualityTask{Interval: 60}, 1, "node-a", observations)
+	if len(trend) != 1 {
+		t.Fatalf("trend points = %d, want 1", len(trend))
+	}
+	if trend[0].Max != 30 {
+		t.Fatalf("robust maximum = %.1f, want 30.0", trend[0].Max)
+	}
+	if trend[0].SamplesSent != 20 || trend[0].SamplesReceived != 20 {
+		t.Fatalf("sample counters = %d/%d, want 20/20", trend[0].SamplesReceived, trend[0].SamplesSent)
+	}
+}
 
 func TestRankTCPQualityNodesUsesIndependentRanks(t *testing.T) {
 	score95 := 95.0

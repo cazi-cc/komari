@@ -50,15 +50,20 @@ func ExecuteUnlockQualityTask(ctx context.Context, task models.UnlockQualityTask
 		mode         string
 		dnsServer    string
 		fixedAddress string
+		proxyURL     string
 	}
-	routes := []route{{mode: "system"}}
+	baseRoutes := []route{{mode: "system"}}
 	if task.ControlEnabled {
-		routes = append(routes, route{mode: "control", dnsServer: task.ControlDNS})
+		baseRoutes = append(baseRoutes, route{mode: "control", dnsServer: task.ControlDNS})
 	}
 	if task.FixedEnabled {
-		routes = append(routes, route{mode: "fixed", fixedAddress: task.FixedAddress})
+		baseRoutes = append(baseRoutes, route{mode: "fixed", fixedAddress: task.FixedAddress})
 	}
 	for _, clientUUID := range task.Clients {
+		routes := append([]route(nil), baseRoutes...)
+		if unlockQualityRelayClient(task, clientUUID) {
+			routes = append(routes, route{mode: "relay", proxyURL: task.RelayProxyURL})
+		}
 		for _, selectedRoute := range routes {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -80,6 +85,7 @@ func ExecuteUnlockQualityTask(ctx context.Context, task models.UnlockQualityTask
 				ProbeKind:       probeKind,
 				DNSServer:       selectedRoute.dnsServer,
 				FixedAddress:    selectedRoute.fixedAddress,
+				ProxyURL:        selectedRoute.proxyURL,
 				SampleCount:     task.SampleCount,
 				TimeoutMS:       task.TimeoutMS,
 			}
@@ -93,6 +99,18 @@ func ExecuteUnlockQualityTask(ctx context.Context, task models.UnlockQualityTask
 		}
 	}
 	return nil
+}
+
+func unlockQualityRelayClient(task models.UnlockQualityTask, clientUUID string) bool {
+	if !task.RelayEnabled {
+		return false
+	}
+	for _, client := range task.RelayClients {
+		if client == clientUUID {
+			return true
+		}
+	}
+	return false
 }
 
 func unlockQualityVerifyDue(task models.UnlockQualityTask, clientUUID, routeMode string) bool {

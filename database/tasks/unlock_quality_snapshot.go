@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,12 +19,19 @@ var unlockQualityWindows = []int{1, 6, 12, 24, 72, 168}
 var unlockQualitySnapshotRefreshMu sync.Mutex
 
 type unlockQualitySnapshot struct {
-	TaskID      uint                        `json:"task_id"`
-	TaskName    string                      `json:"task_name"`
-	Service     string                      `json:"service"`
-	WindowHours int                         `json:"window_hours"`
-	GeneratedAt time.Time                   `json:"generated_at"`
-	Nodes       []unlockQualitySnapshotNode `json:"nodes"`
+	TaskID       uint                        `json:"task_id"`
+	TaskName     string                      `json:"task_name"`
+	Service      string                      `json:"service"`
+	WindowHours  int                         `json:"window_hours"`
+	GeneratedAt  time.Time                   `json:"generated_at"`
+	PathBindings []unlockQualityPathBinding  `json:"path_bindings"`
+	Nodes        []unlockQualitySnapshotNode `json:"nodes"`
+}
+
+type unlockQualityPathBinding struct {
+	PingTaskID   uint   `json:"ping_task_id"`
+	ExitNodeUUID string `json:"exit_node_uuid"`
+	Family       int    `json:"family"`
 }
 
 type unlockQualitySnapshotNode struct {
@@ -34,12 +43,8 @@ type unlockQualitySnapshotNode struct {
 	Grade            string                     `json:"grade"`
 	System           unlockQualityRouteSummary  `json:"system"`
 	Control          *unlockQualityRouteSummary `json:"control,omitempty"`
-	Relay            *unlockQualityRouteSummary `json:"relay,omitempty"`
 	FixedDiagnostic  *unlockQualityRouteSummary `json:"fixed_diagnostic,omitempty"`
 	ImprovementScore *float64                   `json:"improvement_score,omitempty"`
-	RelayScoreGain   *float64                   `json:"relay_score_gain,omitempty"`
-	RelayTTFBGainMS  *float64                   `json:"relay_ttfb_gain_ms,omitempty"`
-	RelayFailureGain *float64                   `json:"relay_failure_gain_percent,omitempty"`
 }
 
 type unlockQualityRouteSummary struct {
@@ -94,6 +99,10 @@ func RefreshUnlockQualitySnapshots(ctx context.Context, force ...bool) error {
 	}
 	forceRefresh := len(force) > 0 && force[0]
 	now := time.Now().UTC()
+	pathBindings, err := loadUnlockQualityPathBindings()
+	if err != nil {
+		return err
+	}
 	var existing []models.UnlockQualitySnapshot
 	if err := dbcore.GetDBInstance().WithContext(ctx).
 		Select("task_id", "window_hours", "generated_at").
@@ -132,7 +141,7 @@ func RefreshUnlockQualitySnapshots(ctx context.Context, force ...bool) error {
 			return err
 		}
 		for _, hours := range dueWindows {
-			snapshot := buildUnlockQualitySnapshot(task, clients, runs, hours, now)
+			snapshot := buildUnlockQualitySnapshot(task, clients, runs, pathBindings, hours, now)
 			payload, err := json.Marshal(snapshot)
 			if err != nil {
 				return err
@@ -175,7 +184,7 @@ func unlockQualityClients(uuids []string) ([]models.Client, error) {
 	return clients, err
 }
 
-func buildUnlockQualitySnapshot(task models.UnlockQualityTask, clients []models.Client, allRuns []models.UnlockQualityRun, hours int, now time.Time) unlockQualitySnapshot {
+func buildUnlockQualitySnapshot(task models.UnlockQualityTask, clients []models.Client, allRuns []models.UnlockQualityRun, pathBindings []unlockQualityPathBinding, hours int, now time.Time) unlockQualitySnapshot {
 	start := now.Add(-time.Duration(hours) * time.Hour)
 	byClient := make(map[string]map[string][]models.UnlockQualityRun)
 	for _, run := range allRuns {
@@ -190,7 +199,8 @@ func buildUnlockQualitySnapshot(task models.UnlockQualityTask, clients []models.
 	snapshot := unlockQualitySnapshot{
 		TaskID: task.Id, TaskName: publicUnlockQualityServiceLabel(task.Service), Service: task.Service,
 		WindowHours: hours, GeneratedAt: now,
-		Nodes: make([]unlockQualitySnapshotNode, 0, len(clients)),
+		PathBindings: filterUnlockQualityPathBindings(pathBindings, clients),
+		Nodes:        make([]unlockQualitySnapshotNode, 0, len(clients)),
 	}
 	for _, client := range clients {
 		routeRuns := byClient[client.UUID]
@@ -207,20 +217,6 @@ func buildUnlockQualitySnapshot(task models.UnlockQualityTask, clients []models.
 				node.ImprovementScore = &value
 			}
 		}
-		if unlockQualityRelayApplies(task, client.UUID) {
-			relay := summarizeUnlockQualityRoute(task, "relay", routeRuns["relay"], hours, now)
-			node.Relay = &relay
-			if system.Score != nil && relay.Score != nil {
-				value := roundUnlockScore(*relay.Score - *system.Score)
-				node.RelayScoreGain = &value
-			}
-			if system.SamplesReceived > 0 && relay.SamplesReceived > 0 {
-				ttfbGain := roundUnlockMetric(system.TTFBP50MS - relay.TTFBP50MS)
-				failureGain := roundUnlockMetric(system.FailurePercent - relay.FailurePercent)
-				node.RelayTTFBGainMS = &ttfbGain
-				node.RelayFailureGain = &failureGain
-			}
-		}
 		if task.FixedEnabled {
 			fixed := summarizeUnlockQualityRoute(task, "fixed", routeRuns["fixed"], hours, now)
 			// Fixed-entry output is diagnostic only and never affects rank.
@@ -233,6 +229,95 @@ func buildUnlockQualitySnapshot(task models.UnlockQualityTask, clients []models.
 	}
 	rankUnlockQualityNodes(snapshot.Nodes)
 	return snapshot
+}
+
+func filterUnlockQualityPathBindings(bindings []unlockQualityPathBinding, clients []models.Client) []unlockQualityPathBinding {
+	allowed := make(map[string]struct{}, len(clients))
+	for _, client := range clients {
+		allowed[client.UUID] = struct{}{}
+	}
+	filtered := make([]unlockQualityPathBinding, 0, len(bindings))
+	for _, binding := range bindings {
+		if _, ok := allowed[binding.ExitNodeUUID]; ok {
+			filtered = append(filtered, binding)
+		}
+	}
+	return filtered
+}
+
+func loadUnlockQualityPathBindings() ([]unlockQualityPathBinding, error) {
+	var clients []models.Client
+	if err := dbcore.GetDBInstance().
+		Select("uuid", "ipv4", "ipv6", "hidden").
+		Where("hidden = ?", false).
+		Find(&clients).Error; err != nil {
+		return nil, err
+	}
+	var pingTasks []models.PingTask
+	if err := dbcore.GetDBInstance().
+		Select("id", "type", "target").
+		Where("type = ?", "icmp").
+		Find(&pingTasks).Error; err != nil {
+		return nil, err
+	}
+	return buildUnlockQualityPathBindings(clients, pingTasks), nil
+}
+
+func buildUnlockQualityPathBindings(clients []models.Client, pingTasks []models.PingTask) []unlockQualityPathBinding {
+	type endpoint struct {
+		uuid   string
+		family int
+	}
+	byAddress := make(map[string]endpoint, len(clients)*2)
+	for _, client := range clients {
+		for _, candidate := range []struct {
+			value  string
+			family int
+		}{{client.IPv4, 4}, {client.IPv6, 6}} {
+			address := normalizedUnlockQualityAddress(candidate.value)
+			if address != "" {
+				byAddress[address] = endpoint{uuid: client.UUID, family: candidate.family}
+			}
+		}
+	}
+	bindings := make([]unlockQualityPathBinding, 0)
+	seen := make(map[string]struct{})
+	for _, task := range pingTasks {
+		if strings.ToLower(strings.TrimSpace(task.Type)) != "icmp" {
+			continue
+		}
+		matched, ok := byAddress[normalizedUnlockQualityAddress(task.Target)]
+		if !ok || matched.uuid == "" {
+			continue
+		}
+		key := fmt.Sprintf("%d:%s:%d", task.Id, matched.uuid, matched.family)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		bindings = append(bindings, unlockQualityPathBinding{
+			PingTaskID: task.Id, ExitNodeUUID: matched.uuid, Family: matched.family,
+		})
+	}
+	sort.Slice(bindings, func(left, right int) bool {
+		if bindings[left].ExitNodeUUID != bindings[right].ExitNodeUUID {
+			return bindings[left].ExitNodeUUID < bindings[right].ExitNodeUUID
+		}
+		if bindings[left].Family != bindings[right].Family {
+			return bindings[left].Family < bindings[right].Family
+		}
+		return bindings[left].PingTaskID < bindings[right].PingTaskID
+	})
+	return bindings
+}
+
+func normalizedUnlockQualityAddress(value string) string {
+	value = strings.TrimSpace(strings.Trim(strings.TrimSpace(value), "[]"))
+	parsed := net.ParseIP(value)
+	if parsed == nil {
+		return ""
+	}
+	return parsed.String()
 }
 
 func publicUnlockQualityServiceLabel(service string) string {

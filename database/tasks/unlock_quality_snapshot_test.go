@@ -75,8 +75,8 @@ func TestUnlockQualityPublicSnapshotHasNoEndpointFields(t *testing.T) {
 		TaskName: "ChatGPT", Service: "chatgpt",
 		Nodes: []unlockQualitySnapshotNode{{
 			Name: "node", System: unlockQualityRouteSummary{RouteMode: "system"},
-			Relay: &unlockQualityRouteSummary{RouteMode: "relay"},
 		}},
+		PathBindings: []unlockQualityPathBinding{{PingTaskID: 7, ExitNodeUUID: "node-b", Family: 4}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -89,24 +89,37 @@ func TestUnlockQualityPublicSnapshotHasNoEndpointFields(t *testing.T) {
 	}
 }
 
-func TestNormalizeUnlockQualityRelayTask(t *testing.T) {
-	task := models.UnlockQualityTask{
-		Name: "ChatGPT", Service: "chatgpt", Interval: 60, VerifyInterval: 900,
-		SampleCount: 1, TimeoutMS: 10000, Clients: models.StringArray{"node-a"},
-		RelayEnabled: true, RelayClients: models.StringArray{"node-a"},
-		RelayProxyURL: "socks5://user:secret@127.0.0.1:1080",
+func TestBuildUnlockQualityPathBindings(t *testing.T) {
+	clients := []models.Client{
+		{UUID: "node-a", IPv4: "192.0.2.10", IPv6: "2001:db8::10"},
+		{UUID: "node-b", IPv4: "192.0.2.20"},
 	}
-	if err := NormalizeUnlockQualityTask(&task); err != nil {
-		t.Fatalf("valid relay task rejected: %v", err)
+	pingTasks := []models.PingTask{
+		{Id: 1, Type: "icmp", Target: "192.0.2.10"},
+		{Id: 2, Type: "icmp", Target: "2001:db8::10"},
+		{Id: 3, Type: "tcp", Target: "192.0.2.20"},
+		{Id: 4, Type: "icmp", Target: "example.com"},
 	}
-	task.RelayClients = models.StringArray{"node-b"}
-	if err := NormalizeUnlockQualityTask(&task); err == nil {
-		t.Fatal("relay client outside task assignment must be rejected")
+	bindings := buildUnlockQualityPathBindings(clients, pingTasks)
+	if len(bindings) != 2 {
+		t.Fatalf("binding count = %d, want 2", len(bindings))
 	}
-	task.RelayClients = models.StringArray{"node-a"}
-	task.RelayProxyURL = "ftp://127.0.0.1:21"
-	if err := NormalizeUnlockQualityTask(&task); err == nil {
-		t.Fatal("unsupported relay scheme must be rejected")
+	if bindings[0].ExitNodeUUID != "node-a" || bindings[0].Family != 4 || bindings[0].PingTaskID != 1 {
+		t.Fatalf("unexpected IPv4 binding: %+v", bindings[0])
+	}
+	if bindings[1].ExitNodeUUID != "node-a" || bindings[1].Family != 6 || bindings[1].PingTaskID != 2 {
+		t.Fatalf("unexpected IPv6 binding: %+v", bindings[1])
+	}
+}
+
+func TestFilterUnlockQualityPathBindings(t *testing.T) {
+	bindings := []unlockQualityPathBinding{
+		{PingTaskID: 1, ExitNodeUUID: "node-a", Family: 4},
+		{PingTaskID: 2, ExitNodeUUID: "node-b", Family: 4},
+	}
+	filtered := filterUnlockQualityPathBindings(bindings, []models.Client{{UUID: "node-b"}})
+	if len(filtered) != 1 || filtered[0].ExitNodeUUID != "node-b" {
+		t.Fatalf("unexpected filtered bindings: %+v", filtered)
 	}
 }
 

@@ -41,11 +41,6 @@ The ChatGPT unlock-quality task requires an Agent build that advertises the
 supported upgrade path; changing only the backend cannot add this capability
 to an older Agent.
 
-ChatGPT relay-quality monitoring additionally requires a Cazi Agent build from
-2026-08-21 or later. The relay proxy URL is private task configuration: it is
-sent only to assigned Agents and must never be copied into public snapshots,
-visitor APIs, logs, notifications, or release metadata.
-
 Agents already on a `Snapshot-*` build check this fork at startup and every six
 hours. An upstream stable Agent does not automatically migrate to the fork, so
 it must be reinstalled once through the fork-owned one-click command. Never

@@ -280,9 +280,6 @@ func unlockQualityDurationMS(task models.UnlockQualityTask) int64 {
 	if task.FixedEnabled {
 		routes++
 	}
-	if task.RelayEnabled {
-		routes++
-	}
 	return max64(2000, int64(routes*probeMaxInt(task.SampleCount, 1)*2000))
 }
 

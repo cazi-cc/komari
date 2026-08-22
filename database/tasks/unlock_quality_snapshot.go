@@ -417,20 +417,19 @@ func scoreUnlockQualityRoute(summary unlockQualityRouteSummary) (float64, unlock
 	unlockPoints := 0.0
 	switch summary.Status {
 	case "available":
-		unlockPoints = 40
+		unlockPoints = 25
 	case "partial":
-		unlockPoints = 20
+		unlockPoints = 12.5
 	}
 	failureRatio := math.Max(0, math.Min(1, summary.FailurePercent/100))
-	reliability := 25 * math.Pow(1-failureRatio, 3)
-	ttfb := 10*descendingUnlockScore(summary.TTFBP50MS, 300, 2500) +
-		10*descendingUnlockScore(summary.TTFBP95MS, 500, 3000)
-	transport := 10 * descendingUnlockScore(summary.ConnectMS+summary.TLSMS, 200, 1500)
-	cv := 1.0
-	if summary.TTFBP50MS > 0 {
-		cv = summary.JitterMS / summary.TTFBP50MS
-	}
-	stability := 5 * descendingUnlockScore(cv, 0.10, 0.75)
+	reliability := 30 * math.Pow(1-failureRatio, 3)
+	ttfb := 16*unlockQualityLatencyFactor(summary.TTFBP50MS) +
+		24*unlockQualityLatencyFactor(summary.TTFBP95MS)
+	// TTFB is measured from request start, so it already includes DNS, TCP and
+	// TLS. Keep those phases diagnostic-only instead of counting them twice.
+	transport := 0.0
+	tailSpread := math.Max(0, summary.TTFBP95MS-summary.TTFBP50MS)
+	stability := 5 * unlockQualityTailFactor(tailSpread)
 	parts := unlockQualityScoreParts{
 		Unlock: roundUnlockScore(unlockPoints), Reliability: roundUnlockScore(reliability),
 		TTFB: roundUnlockScore(ttfb), Transport: roundUnlockScore(transport),
@@ -454,14 +453,50 @@ func scoreUnlockQualityRoute(summary unlockQualityRouteSummary) (float64, unlock
 	return roundUnlockScore(score), parts
 }
 
-func descendingUnlockScore(value, good, bad float64) float64 {
-	if value <= good {
-		return 1
-	}
-	if value >= bad {
+func unlockQualityLatencyFactor(value float64) float64 {
+	if value <= 0 {
 		return 0
 	}
-	return 1 - (value-good)/(bad-good)
+	return unlockQualityPiecewiseFactor(value, []unlockQualityScorePoint{
+		{Value: 25, Factor: 1},
+		{Value: 50, Factor: 0.95},
+		{Value: 100, Factor: 0.85},
+		{Value: 200, Factor: 0.65},
+		{Value: 500, Factor: 0.35},
+		{Value: 1500, Factor: 0},
+	})
+}
+
+func unlockQualityTailFactor(value float64) float64 {
+	return unlockQualityPiecewiseFactor(value, []unlockQualityScorePoint{
+		{Value: 10, Factor: 1},
+		{Value: 20, Factor: 0.9},
+		{Value: 50, Factor: 0.7},
+		{Value: 100, Factor: 0.4},
+		{Value: 300, Factor: 0},
+	})
+}
+
+type unlockQualityScorePoint struct {
+	Value  float64
+	Factor float64
+}
+
+func unlockQualityPiecewiseFactor(value float64, points []unlockQualityScorePoint) float64 {
+	if len(points) == 0 {
+		return 0
+	}
+	if value <= points[0].Value {
+		return points[0].Factor
+	}
+	for index := 1; index < len(points); index++ {
+		left, right := points[index-1], points[index]
+		if value <= right.Value {
+			position := (value - left.Value) / (right.Value - left.Value)
+			return left.Factor + position*(right.Factor-left.Factor)
+		}
+	}
+	return points[len(points)-1].Factor
 }
 
 func unlockQualityGrade(score float64) string {

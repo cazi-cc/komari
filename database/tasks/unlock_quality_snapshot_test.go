@@ -14,7 +14,7 @@ import (
 
 func TestUnlockQualityScoreGuards(t *testing.T) {
 	base := unlockQualityRouteSummary{
-		Status: "available", FailurePercent: 0, TTFBP50MS: 120, TTFBP95MS: 180,
+		Status: "available", FailurePercent: 0, TTFBP50MS: 80, TTFBP95MS: 120,
 		ConnectMS: 20, TLSMS: 40, JitterMS: 5,
 	}
 	score, _ := scoreUnlockQualityRoute(base)
@@ -31,6 +31,45 @@ func TestUnlockQualityScoreGuards(t *testing.T) {
 	score, _ = scoreUnlockQualityRoute(base)
 	if score > 39.9 {
 		t.Fatalf("region-limited score %.1f exceeds cap", score)
+	}
+}
+
+func TestUnlockQualityScoreRewardsVisibleLatency(t *testing.T) {
+	fast := unlockQualityRouteSummary{
+		Status: "available", FailurePercent: 0, TTFBP50MS: 16, TTFBP95MS: 25,
+		ConnectMS: 2, TLSMS: 6, JitterMS: 4,
+	}
+	slow := unlockQualityRouteSummary{
+		Status: "available", FailurePercent: 0, TTFBP50MS: 171, TTFBP95MS: 209,
+		ConnectMS: 2, TLSMS: 84, JitterMS: 30,
+	}
+	fastScore, _ := scoreUnlockQualityRoute(fast)
+	slowScore, _ := scoreUnlockQualityRoute(slow)
+	if fastScore <= slowScore {
+		t.Fatalf("fast route scored %.1f, want greater than slow route %.1f", fastScore, slowScore)
+	}
+	if slowScore >= 90 {
+		t.Fatalf("171/209 ms route scored %.1f, want below excellent grade", slowScore)
+	}
+}
+
+func TestUnlockQualityScoreDoesNotDoubleCountTransport(t *testing.T) {
+	base := unlockQualityRouteSummary{
+		Status: "available", FailurePercent: 0, TTFBP50MS: 20, TTFBP95MS: 35,
+		ConnectMS: 2, TLSMS: 8,
+	}
+	baseScore, _ := scoreUnlockQualityRoute(base)
+	base.ConnectMS = 80
+	base.TLSMS = 180
+	changedScore, _ := scoreUnlockQualityRoute(base)
+	if baseScore != changedScore {
+		t.Fatalf("transport phases changed score from %.1f to %.1f although TTFB already includes them", baseScore, changedScore)
+	}
+}
+
+func TestUnlockQualityTailFactorRewardsZeroSpread(t *testing.T) {
+	if factor := unlockQualityTailFactor(0); factor != 1 {
+		t.Fatalf("zero TTFB tail spread factor = %.1f, want 1", factor)
 	}
 }
 

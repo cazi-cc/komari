@@ -17,6 +17,13 @@ import (
 	"github.com/google/uuid"
 )
 
+var agentClientInfoFields = map[string]struct{}{
+	"uuid": {}, "cpu_name": {}, "cpu_cores": {}, "cpu_physical_cores": {},
+	"arch": {}, "os": {}, "kernel_version": {}, "ipv4": {}, "ipv6": {},
+	"mem_total": {}, "swap_total": {}, "disk_total": {}, "gpu_name": {},
+	"virtualization": {}, "version": {}, "region": {},
+}
+
 func DeleteClient(clientUuid string) error {
 	db := dbcore.GetDBInstance()
 	err := db.Delete(&models.Client{}, "uuid = ?", clientUuid).Error
@@ -33,8 +40,18 @@ func SaveClientInfo(update map[string]interface{}) error {
 		return fmt.Errorf("invalid client UUID")
 	}
 
+	// Basic information is owned by the agent. Keep administrator-owned node
+	// metadata out of this update path even if a buggy or modified agent sends it.
+	filtered := make(map[string]interface{}, len(update))
+	for key, value := range update {
+		if _, allowed := agentClientInfoFields[key]; allowed {
+			filtered[key] = value
+		}
+	}
+	update = filtered
+
 	// 确保更新的字段不为空
-	if len(update) == 0 {
+	if len(update) <= 1 {
 		return fmt.Errorf("no fields to update")
 	}
 

@@ -84,3 +84,52 @@ func TestV2BasicInfoFillsRegionFromGeoIP(t *testing.T) {
 		t.Fatalf("expected GeoIP region to be saved, got %q", got.Region)
 	}
 }
+
+func TestBasicInfoCannotOverwriteAdminOwnedFields(t *testing.T) {
+	flags.DatabaseType = "sqlite"
+	flags.DatabaseFile = "file:v2_basic_info_geoip?mode=memory&cache=shared"
+
+	db := dbcore.GetDBInstance()
+	clientUUID := "client-admin-fields"
+	now := time.Now().UTC()
+	if err := db.Create(&models.Client{
+		UUID:               clientUUID,
+		Token:              "token-admin-fields",
+		Name:               "managed name",
+		PublicRemark:       "managed remark",
+		Hidden:             true,
+		ReachableAddresses: models.StringArray{"141.11.86.162"},
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}).Error; err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+
+	if err := saveClientBasicInfo(map[string]interface{}{
+		"ipv4":                "61.224.64.204",
+		"region":              "forged region",
+		"name":                "agent supplied name",
+		"public_remark":       "agent supplied remark",
+		"hidden":              false,
+		"reachable_addresses": []interface{}{},
+	}, clientUUID, ""); err != nil {
+		t.Fatalf("save agent basic info: %v", err)
+	}
+
+	var got models.Client
+	if err := db.First(&got, "uuid = ?", clientUUID).Error; err != nil {
+		t.Fatalf("load client: %v", err)
+	}
+	if got.IPv4 != "61.224.64.204" {
+		t.Fatalf("agent-owned IPv4 was not updated: %q", got.IPv4)
+	}
+	if got.Name != "managed name" || got.PublicRemark != "managed remark" || !got.Hidden {
+		t.Fatalf("administrator-owned metadata was overwritten: %+v", got)
+	}
+	if got.Region == "forged region" {
+		t.Fatal("agent-supplied region was trusted")
+	}
+	if len(got.ReachableAddresses) != 1 || got.ReachableAddresses[0] != "141.11.86.162" {
+		t.Fatalf("reachable addresses were overwritten: %#v", got.ReachableAddresses)
+	}
+}

@@ -23,6 +23,9 @@ func getClientIPType(ip net.IP) int {
 }
 
 func saveClientBasicInfo(info map[string]interface{}, uuid string, fallbackIP string) error {
+	// Region is derived from the observed address below; never trust a value
+	// supplied by the agent.
+	delete(info, "region")
 	info["uuid"] = uuid
 	applyFallbackClientIP(info, fallbackIP)
 	appendClientRegionFromGeoIP(info)

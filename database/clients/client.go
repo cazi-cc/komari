@@ -3,14 +3,16 @@ package clients
 import (
 	"encoding/json"
 	"fmt"
-	logger "github.com/komari-monitor/komari/utils/log"
 	"math"
+	"net"
+	"strings"
 	"time"
 
 	"github.com/komari-monitor/komari/database/dbcore"
 	"github.com/komari-monitor/komari/database/models"
 	"github.com/komari-monitor/komari/database/tasks"
 	"github.com/komari-monitor/komari/utils"
+	logger "github.com/komari-monitor/komari/utils/log"
 
 	"github.com/google/uuid"
 )
@@ -263,12 +265,101 @@ func SaveClient(updates map[string]interface{}) error {
 			return fmt.Errorf("expired_at must be an RFC3339 timestamp with a timezone")
 		}
 	}
+	if value, exists := updates["reachable_addresses"]; exists {
+		addresses, err := normalizeReachableAddresses(value)
+		if err != nil {
+			return err
+		}
+		if err := ensureReachableAddressesUnique(clientUUID, addresses); err != nil {
+			return err
+		}
+		updates["reachable_addresses"] = addresses
+	}
 
 	updates["updated_at"] = time.Now().UTC()
 
 	err := db.Model(&models.Client{}).Where("uuid = ?", clientUUID).Updates(updates).Error
 	if err != nil {
 		return err
+	}
+	return nil
+}
+
+const maxReachableAddressesPerClient = 16
+
+func normalizeReachableAddresses(value interface{}) (models.StringArray, error) {
+	var values []string
+	switch typed := value.(type) {
+	case nil:
+		return models.StringArray{}, nil
+	case []string:
+		values = typed
+	case models.StringArray:
+		values = []string(typed)
+	case []interface{}:
+		values = make([]string, 0, len(typed))
+		for _, item := range typed {
+			text, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("reachable_addresses must contain only IP address strings")
+			}
+			values = append(values, text)
+		}
+	default:
+		return nil, fmt.Errorf("reachable_addresses must be an array of IP address strings")
+	}
+	if len(values) > maxReachableAddressesPerClient {
+		return nil, fmt.Errorf("reachable_addresses supports at most %d addresses", maxReachableAddressesPerClient)
+	}
+
+	result := make(models.StringArray, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(strings.Trim(strings.TrimSpace(value), "[]"))
+		if value == "" {
+			continue
+		}
+		parsed := net.ParseIP(value)
+		if parsed == nil {
+			return nil, fmt.Errorf("reachable_addresses contains an invalid IP address: %s", value)
+		}
+		address := parsed.String()
+		if _, exists := seen[address]; exists {
+			continue
+		}
+		seen[address] = struct{}{}
+		result = append(result, address)
+	}
+	return result, nil
+}
+
+func ensureReachableAddressesUnique(clientUUID string, addresses models.StringArray) error {
+	if len(addresses) == 0 {
+		return nil
+	}
+	wanted := make(map[string]struct{}, len(addresses))
+	for _, address := range addresses {
+		wanted[address] = struct{}{}
+	}
+
+	var clients []models.Client
+	if err := dbcore.GetDBInstance().
+		Select("uuid", "name", "ipv4", "ipv6", "reachable_addresses").
+		Where("uuid <> ?", clientUUID).
+		Find(&clients).Error; err != nil {
+		return fmt.Errorf("validate reachable_addresses: %w", err)
+	}
+	for _, client := range clients {
+		candidates := append([]string{client.IPv4, client.IPv6}, []string(client.ReachableAddresses)...)
+		for _, candidate := range candidates {
+			parsed := net.ParseIP(strings.TrimSpace(strings.Trim(candidate, "[]")))
+			if parsed == nil {
+				continue
+			}
+			if _, conflict := wanted[parsed.String()]; conflict {
+				return fmt.Errorf("reachable address %s is already assigned to client %s", parsed.String(), client.Name)
+			}
+		}
 	}
 	return nil
 }

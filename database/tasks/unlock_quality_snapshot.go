@@ -248,7 +248,7 @@ func filterUnlockQualityPathBindings(bindings []unlockQualityPathBinding, client
 func loadUnlockQualityPathBindings() ([]unlockQualityPathBinding, error) {
 	var clients []models.Client
 	if err := dbcore.GetDBInstance().
-		Select("uuid", "ipv4", "ipv6", "hidden").
+		Select("uuid", "ipv4", "ipv6", "reachable_addresses", "hidden").
 		Where("hidden = ?", false).
 		Find(&clients).Error; err != nil {
 		return nil, err
@@ -269,15 +269,39 @@ func buildUnlockQualityPathBindings(clients []models.Client, pingTasks []models.
 		family int
 	}
 	byAddress := make(map[string]endpoint, len(clients)*2)
+	ambiguous := make(map[string]struct{})
+	addEndpoint := func(value string, candidate endpoint) {
+		address := normalizedUnlockQualityAddress(value)
+		if address == "" {
+			return
+		}
+		if _, conflict := ambiguous[address]; conflict {
+			return
+		}
+		if existing, exists := byAddress[address]; exists && existing.uuid != candidate.uuid {
+			delete(byAddress, address)
+			ambiguous[address] = struct{}{}
+			return
+		}
+		byAddress[address] = candidate
+	}
 	for _, client := range clients {
 		for _, candidate := range []struct {
 			value  string
 			family int
 		}{{client.IPv4, 4}, {client.IPv6, 6}} {
-			address := normalizedUnlockQualityAddress(candidate.value)
-			if address != "" {
-				byAddress[address] = endpoint{uuid: client.UUID, family: candidate.family}
+			addEndpoint(candidate.value, endpoint{uuid: client.UUID, family: candidate.family})
+		}
+		for _, value := range client.ReachableAddresses {
+			address := net.ParseIP(strings.TrimSpace(strings.Trim(value, "[]")))
+			if address == nil {
+				continue
 			}
+			family := 6
+			if address.To4() != nil {
+				family = 4
+			}
+			addEndpoint(address.String(), endpoint{uuid: client.UUID, family: family})
 		}
 	}
 	bindings := make([]unlockQualityPathBinding, 0)

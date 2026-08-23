@@ -258,6 +258,7 @@ func getNodes(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcEr
 func redactGuestNode(node models.Client) models.Client {
 	node.IPv4 = ""
 	node.IPv6 = ""
+	node.ReachableAddresses = nil
 	node.Remark = ""
 	node.Version = ""
 	node.Token = ""

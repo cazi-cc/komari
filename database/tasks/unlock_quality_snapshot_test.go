@@ -130,7 +130,7 @@ func TestUnlockQualityPublicSnapshotHasNoEndpointFields(t *testing.T) {
 
 func TestBuildUnlockQualityPathBindings(t *testing.T) {
 	clients := []models.Client{
-		{UUID: "node-a", IPv4: "192.0.2.10", IPv6: "2001:db8::10"},
+		{UUID: "node-a", IPv4: "192.0.2.10", IPv6: "2001:db8::10", ReachableAddresses: models.StringArray{"198.51.100.10"}},
 		{UUID: "node-b", IPv4: "192.0.2.20"},
 	}
 	pingTasks := []models.PingTask{
@@ -138,16 +138,33 @@ func TestBuildUnlockQualityPathBindings(t *testing.T) {
 		{Id: 2, Type: "icmp", Target: "2001:db8::10"},
 		{Id: 3, Type: "tcp", Target: "192.0.2.20"},
 		{Id: 4, Type: "icmp", Target: "example.com"},
+		{Id: 5, Type: "icmp", Target: "198.51.100.10"},
 	}
 	bindings := buildUnlockQualityPathBindings(clients, pingTasks)
-	if len(bindings) != 2 {
-		t.Fatalf("binding count = %d, want 2", len(bindings))
+	if len(bindings) != 3 {
+		t.Fatalf("binding count = %d, want 3", len(bindings))
 	}
 	if bindings[0].ExitNodeUUID != "node-a" || bindings[0].Family != 4 || bindings[0].PingTaskID != 1 {
 		t.Fatalf("unexpected IPv4 binding: %+v", bindings[0])
 	}
-	if bindings[1].ExitNodeUUID != "node-a" || bindings[1].Family != 6 || bindings[1].PingTaskID != 2 {
-		t.Fatalf("unexpected IPv6 binding: %+v", bindings[1])
+	if bindings[2].ExitNodeUUID != "node-a" || bindings[2].Family != 6 || bindings[2].PingTaskID != 2 {
+		t.Fatalf("unexpected IPv6 binding: %+v", bindings[2])
+	}
+	if bindings[1].ExitNodeUUID != "node-a" || bindings[1].Family != 4 || bindings[1].PingTaskID != 5 {
+		t.Fatalf("unexpected reachable-address binding: %+v", bindings[1])
+	}
+}
+
+func TestBuildUnlockQualityPathBindingsSkipsAmbiguousAddress(t *testing.T) {
+	clients := []models.Client{
+		{UUID: "node-a", ReachableAddresses: models.StringArray{"198.51.100.20"}},
+		{UUID: "node-b", IPv4: "198.51.100.20"},
+	}
+	bindings := buildUnlockQualityPathBindings(clients, []models.PingTask{
+		{Id: 1, Type: "icmp", Target: "198.51.100.20"},
+	})
+	if len(bindings) != 0 {
+		t.Fatalf("ambiguous address produced bindings: %+v", bindings)
 	}
 }
 

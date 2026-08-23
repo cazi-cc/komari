@@ -50,6 +50,30 @@ func TestHasLegacyConfigTable(t *testing.T) {
 	})
 }
 
+func TestMigrateClientReachableAddresses(t *testing.T) {
+	type legacyClient struct {
+		UUID  string `gorm:"type:varchar(36);primaryKey"`
+		Token string `gorm:"type:varchar(255);unique;not null"`
+	}
+
+	db := openTestDB(t, "migrations_client_reachable_addresses")
+	if err := db.Table("clients").AutoMigrate(&legacyClient{}); err != nil {
+		t.Fatalf("migrate legacy client table: %v", err)
+	}
+	if db.Migrator().HasColumn("clients", "reachable_addresses") {
+		t.Fatal("legacy client unexpectedly contains reachable_addresses")
+	}
+	if err := migrateClientReachableAddresses(db); err != nil {
+		t.Fatalf("migrate client reachable addresses: %v", err)
+	}
+	if !db.Migrator().HasColumn("clients", "reachable_addresses") {
+		t.Fatal("reachable_addresses column was not added")
+	}
+	if err := migrateClientReachableAddresses(db); err != nil {
+		t.Fatalf("repeat migration: %v", err)
+	}
+}
+
 func TestRunSkipsLegacyConfigMigrationForCurrentConfigItemTable(t *testing.T) {
 	db := openTestDB(t, "migrations_config_item_run")
 	if err := db.AutoMigrate(&appconfig.ConfigItem{}); err != nil {

@@ -109,6 +109,9 @@ func Run(ctx Context) error {
 			return err
 		}
 	}
+	if err := migrateClientReachableAddresses(db); err != nil {
+		return err
+	}
 	if err := migrateLegacyClientInfo(db); err != nil {
 		return err
 	}
@@ -133,6 +136,16 @@ func Run(ctx Context) error {
 		return fmt.Errorf("mark UTC timestamp migration done: %w", err)
 	}
 
+	return nil
+}
+
+func migrateClientReachableAddresses(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&models.Client{}) || db.Migrator().HasColumn(&models.Client{}, "ReachableAddresses") {
+		return nil
+	}
+	if err := db.Migrator().AddColumn(&models.Client{}, "ReachableAddresses"); err != nil {
+		return fmt.Errorf("add client reachable addresses column: %w", err)
+	}
 	return nil
 }
 

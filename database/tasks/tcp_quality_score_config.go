@@ -9,7 +9,7 @@ import (
 	"github.com/komari-monitor/komari/internal/config"
 )
 
-const tcpQualityScoreModelVersion = 3
+const tcpQualityScoreModelVersion = 4
 
 type tcpQualityScoreConfig struct {
 	ModelVersion                 int     `json:"tcpQualityScoreModelVersion"`
@@ -45,17 +45,17 @@ type tcpQualityScoreConfig struct {
 func defaultTCPQualityScoreConfig() tcpQualityScoreConfig {
 	return tcpQualityScoreConfig{
 		ModelVersion:                 tcpQualityScoreModelVersion,
-		OverallICMPWeight:            35,
-		OverallStandardWeight:        55,
-		OverallLargeWeight:           10,
+		OverallICMPWeight:            25,
+		OverallStandardWeight:        45,
+		OverallLargeWeight:           30,
 		StandardLossWeight:           55,
-		StandardP50Weight:            15,
-		StandardP95Weight:            25,
-		StandardCoverageWeight:       5,
+		StandardP50Weight:            20,
+		StandardP95Weight:            15,
+		StandardCoverageWeight:       10,
 		LargeLossWeight:              55,
 		LargeExtraLossWeight:         25,
-		LargeP95DegradationWeight:    15,
-		LargeCoverageWeight:          5,
+		LargeP95DegradationWeight:    20,
+		LargeCoverageWeight:          0,
 		ProfileMeanWeight:            70,
 		ProfileP20Weight:             30,
 		MinimumRuns:                  3,
@@ -69,9 +69,9 @@ func defaultTCPQualityScoreConfig() tcpQualityScoreConfig {
 		GuardCriticalMaximumScore:    69.9,
 		GuardSevereLossPercent:       10,
 		GuardSevereMaximumScore:      49.9,
-		ExcellentThreshold:           95,
-		GoodThreshold:                85,
-		FairThreshold:                70,
+		ExcellentThreshold:           90,
+		GoodThreshold:                80,
+		FairThreshold:                60,
 	}
 }
 
@@ -89,11 +89,14 @@ func loadTCPQualityScoreConfig() tcpQualityScoreConfig {
 	if err := json.Unmarshal([]byte(stored.Data), &settings); err != nil {
 		return defaults
 	}
-	version := 0
-	_ = json.Unmarshal(settings["tcpQualityScoreModelVersion"], &version)
-	if version != tcpQualityScoreModelVersion {
-		return defaults
-	}
+	return parseTCPQualityScoreConfig(settings)
+}
+
+// Score setting keys are stable configuration fields. Read the fields we
+// understand even when a newer theme writes a newer model version, so an
+// independent frontend release cannot silently discard administrator values.
+func parseTCPQualityScoreConfig(settings map[string]json.RawMessage) tcpQualityScoreConfig {
+	defaults := defaultTCPQualityScoreConfig()
 	raw, err := json.Marshal(settings)
 	if err != nil {
 		return defaults

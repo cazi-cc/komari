@@ -44,19 +44,21 @@ type weightedValue struct {
 }
 
 type tcpQualityModeStats struct {
-	LossPercent     float64  `json:"loss_percent"`
-	Min             float64  `json:"min_ms"`
-	Max             float64  `json:"max_ms"`
-	Average         float64  `json:"average_ms"`
-	P50             float64  `json:"p50_ms"`
-	P95             float64  `json:"p95_ms"`
-	SamplesSent     int      `json:"samples_sent"`
-	SamplesReceived int      `json:"samples_received"`
-	Runs            int      `json:"runs"`
-	CoveragePercent float64  `json:"coverage_percent"`
-	Score           *float64 `json:"score"`
-	Rankable        bool     `json:"rankable"`
-	Reason          string   `json:"reason,omitempty"`
+	LossPercent     float64            `json:"loss_percent"`
+	Min             float64            `json:"min_ms"`
+	Max             float64            `json:"max_ms"`
+	Average         float64            `json:"average_ms"`
+	P50             float64            `json:"p50_ms"`
+	P95             float64            `json:"p95_ms"`
+	SamplesSent     int                `json:"samples_sent"`
+	SamplesReceived int                `json:"samples_received"`
+	Runs            int                `json:"runs"`
+	CoveragePercent float64            `json:"coverage_percent"`
+	Score           *float64           `json:"score"`
+	ScoreComponents map[string]float64 `json:"score_components,omitempty"`
+	ScoreInputs     map[string]float64 `json:"score_inputs,omitempty"`
+	Rankable        bool               `json:"rankable"`
+	Reason          string             `json:"reason,omitempty"`
 }
 
 type tcpQualityNodeTarget struct {
@@ -78,23 +80,28 @@ type tcpQualityTrendPoint struct {
 }
 
 type tcpQualitySnapshotNode struct {
-	UUID             string                 `json:"uuid"`
-	Name             string                 `json:"name"`
-	Region           string                 `json:"region"`
-	PublicRemark     string                 `json:"public_remark,omitempty"`
-	Rank             *int                   `json:"rank"`
-	Grade            string                 `json:"grade"`
-	Rankable         bool                   `json:"rankable"`
-	Reason           string                 `json:"reason,omitempty"`
-	ICMPScore        *float64               `json:"icmp_score"`
-	TCPStandardScore *float64               `json:"tcp_standard_score"`
-	LargeScore       *float64               `json:"large_experimental_score"`
-	TCPScore         *float64               `json:"tcp_score"`
-	OverallScore     *float64               `json:"overall_score"`
-	Standard         tcpQualityModeStats    `json:"standard"`
-	Large            *tcpQualityModeStats   `json:"large,omitempty"`
-	Targets          []tcpQualityNodeTarget `json:"targets"`
-	Trend            []tcpQualityTrendPoint `json:"trend"`
+	UUID                    string                 `json:"uuid"`
+	Name                    string                 `json:"name"`
+	Region                  string                 `json:"region"`
+	PublicRemark            string                 `json:"public_remark,omitempty"`
+	Rank                    *int                   `json:"rank"`
+	Grade                   string                 `json:"grade"`
+	Rankable                bool                   `json:"rankable"`
+	Reason                  string                 `json:"reason,omitempty"`
+	ICMPScore               *float64               `json:"icmp_score"`
+	TCPStandardScore        *float64               `json:"tcp_standard_score"`
+	LargeScore              *float64               `json:"large_experimental_score"`
+	TCPScore                *float64               `json:"tcp_score"`
+	OverallScore            *float64               `json:"overall_score"`
+	TCPScoreBeforeGuard     *float64               `json:"tcp_score_before_guard"`
+	OverallScoreBeforeGuard *float64               `json:"overall_score_before_guard"`
+	LossGuardCap            *float64               `json:"loss_guard_cap"`
+	Diagnostics             []string               `json:"diagnostics"`
+	Standard                tcpQualityModeStats    `json:"standard"`
+	Large                   *tcpQualityModeStats   `json:"large,omitempty"`
+	Targets                 []tcpQualityNodeTarget `json:"targets"`
+	Trend                   []tcpQualityTrendPoint `json:"trend"`
+	LargeTrend              []tcpQualityTrendPoint `json:"large_trend,omitempty"`
 }
 
 type tcpQualityScoreModel struct {
@@ -223,7 +230,7 @@ func buildTCPQualitySnapshot(ctx context.Context, task models.TCPQualityTask, ho
 		Targets:            labels,
 		ExcludedTargetKeys: sortedSetKeys(excludedTargets),
 		ScoreModel: tcpQualityScoreModel{
-			Version: "tcp-quality-v4",
+			Version: "tcp-quality-v5",
 			Weights: map[string]any{
 				"overall_with_large": map[string]float64{
 					"icmp": scoreConfig.OverallICMPWeight, "tcp_standard": scoreConfig.OverallStandardWeight,
@@ -247,6 +254,14 @@ func buildTCPQualitySnapshot(ctx context.Context, task models.TCPQualityTask, ho
 				"minimum_large_samples":                  scoreConfig.MinimumLargeSamples,
 				"minimum_target_coverage_percent":        scoreConfig.MinimumTargetCoveragePercent,
 				"simultaneous_reference_failure_percent": scoreConfig.ReferenceFailurePercent,
+				"loss_score_caps": map[string]float64{
+					"warning_loss_percent": scoreConfig.GuardWarningLossPercent, "warning_maximum_score": scoreConfig.GuardWarningMaximumScore,
+					"critical_loss_percent": scoreConfig.GuardCriticalLossPercent, "critical_maximum_score": scoreConfig.GuardCriticalMaximumScore,
+					"severe_loss_percent": scoreConfig.GuardSevereLossPercent, "severe_maximum_score": scoreConfig.GuardSevereMaximumScore,
+				},
+				"grade_thresholds": map[string]float64{
+					"excellent": scoreConfig.ExcellentThreshold, "good": scoreConfig.GoodThreshold, "fair": scoreConfig.FairThreshold,
+				},
 			},
 		},
 		Privacy: "Public snapshots contain target labels only; concrete IP addresses, hostnames and ports are omitted.",
@@ -422,14 +437,6 @@ func aggregateTCPQualityObservations(task models.TCPQualityTask, hours int, obse
 func scoreTCPQualityTargets(task models.TCPQualityTask, clients []string, labels []utils.TCPQualityTargetLabel, data map[string]map[string]map[string]*tcpQualityModeStats, scoreConfig tcpQualityScoreConfig) {
 	for _, label := range labels {
 		for _, mode := range []string{"standard", "large"} {
-			p50Values, p95Values := []float64{}, []float64{}
-			for _, client := range clients {
-				stats := data[client][label.Key][mode]
-				if stats != nil && stats.Rankable {
-					p50Values = append(p50Values, stats.P50)
-					p95Values = append(p95Values, stats.P95)
-				}
-			}
 			for _, client := range clients {
 				stats := data[client][label.Key][mode]
 				if stats == nil || !stats.Rankable {
@@ -437,14 +444,19 @@ func scoreTCPQualityTargets(task models.TCPQualityTask, clients []string, labels
 				}
 				var score float64
 				if mode == "standard" {
-					p50Score := math.Min(robustRelativeScore(p50Values, stats.P50), tcpP50AbsoluteScore(stats.P50))
-					p95Score := math.Min(robustRelativeScore(p95Values, stats.P95), tcpP95AbsoluteScore(stats.P95))
+					components := map[string]float64{
+						"first_response_loss": tcpLossScore(stats.LossPercent),
+						"p50":                 tcpP50AbsoluteScore(stats.P50),
+						"p95":                 tcpP95AbsoluteScore(stats.P95),
+						"coverage":            stats.CoveragePercent,
+					}
 					score = weightedScore(
-						[2]float64{tcpLossScore(stats.LossPercent), scoreConfig.StandardLossWeight},
-						[2]float64{p50Score, scoreConfig.StandardP50Weight},
-						[2]float64{p95Score, scoreConfig.StandardP95Weight},
-						[2]float64{stats.CoveragePercent, scoreConfig.StandardCoverageWeight},
+						[2]float64{components["first_response_loss"], scoreConfig.StandardLossWeight},
+						[2]float64{components["p50"], scoreConfig.StandardP50Weight},
+						[2]float64{components["p95"], scoreConfig.StandardP95Weight},
+						[2]float64{components["coverage"], scoreConfig.StandardCoverageWeight},
 					)
+					stats.ScoreComponents = roundScoreMap(components)
 				} else {
 					standard := data[client][label.Key]["standard"]
 					if standard == nil || !standard.Rankable {
@@ -454,12 +466,23 @@ func scoreTCPQualityTargets(task models.TCPQualityTask, clients []string, labels
 					}
 					extraLoss := math.Max(0, stats.LossPercent-standard.LossPercent)
 					ratio := stats.P95 / math.Max(standard.P95, 1)
+					components := map[string]float64{
+						"absolute_loss":   tcpLossScore(stats.LossPercent),
+						"extra_loss":      tcpExtraLossScore(extraLoss),
+						"p95_degradation": tcpLargeP95RatioScore(ratio),
+						"coverage":        stats.CoveragePercent,
+					}
 					score = weightedScore(
-						[2]float64{tcpLossScore(stats.LossPercent), scoreConfig.LargeLossWeight},
-						[2]float64{tcpExtraLossScore(extraLoss), scoreConfig.LargeExtraLossWeight},
-						[2]float64{tcpLargeP95RatioScore(ratio), scoreConfig.LargeP95DegradationWeight},
-						[2]float64{stats.CoveragePercent, scoreConfig.LargeCoverageWeight},
+						[2]float64{components["absolute_loss"], scoreConfig.LargeLossWeight},
+						[2]float64{components["extra_loss"], scoreConfig.LargeExtraLossWeight},
+						[2]float64{components["p95_degradation"], scoreConfig.LargeP95DegradationWeight},
+						[2]float64{components["coverage"], scoreConfig.LargeCoverageWeight},
 					)
+					stats.ScoreComponents = roundScoreMap(components)
+					stats.ScoreInputs = map[string]float64{
+						"extra_loss_percent":    roundScore(extraLoss),
+						"p95_degradation_ratio": roundScore(ratio),
+					}
 				}
 				score = roundScore(score)
 				stats.Score = &score
@@ -507,6 +530,10 @@ func buildTCPQualitySnapshotNode(task models.TCPQualityTask, hours int, client m
 	node.TCPStandardScore = node.Standard.Score
 	if task.LargeEnabled {
 		large := profileModeStats(largeAggregate, largeScores, len(largeScores), availableTargets, scoreConfig, scoreConfig.MinimumLargeSamples)
+		if large.Rankable && node.Standard.Rankable {
+			large.ScoreInputs["extra_loss_percent"] = roundScore(math.Max(0, large.LossPercent-node.Standard.LossPercent))
+			large.ScoreInputs["p95_degradation_ratio"] = roundScore(large.P95 / math.Max(node.Standard.P95, 1))
+		}
 		node.Large = &large
 		node.LargeScore = large.Score
 	}
@@ -518,7 +545,9 @@ func buildTCPQualitySnapshotNode(task models.TCPQualityTask, hours int, client m
 				[2]float64{*node.LargeScore, scoreConfig.OverallLargeWeight},
 			)
 		}
-		tcpScore = applyTCPQualityLossGuard(tcpScore, node.Standard.LossPercent, scoreConfig)
+		beforeGuard := roundScore(tcpScore)
+		node.TCPScoreBeforeGuard = &beforeGuard
+		tcpScore = applyTCPQualityLossGuard(beforeGuard, node.Standard.LossPercent, scoreConfig)
 		tcpScore = roundScore(tcpScore)
 		node.TCPScore = &tcpScore
 	}
@@ -536,10 +565,14 @@ func buildTCPQualitySnapshotNode(task models.TCPQualityTask, hours int, client m
 				[2]float64{*node.TCPStandardScore, scoreConfig.OverallStandardWeight},
 			)
 		}
-		overall = applyTCPQualityLossGuard(overall, node.Standard.LossPercent, scoreConfig)
+		beforeGuard := roundScore(overall)
+		node.OverallScoreBeforeGuard = &beforeGuard
+		overall = applyTCPQualityLossGuard(beforeGuard, node.Standard.LossPercent, scoreConfig)
 		overall = roundScore(overall)
 		node.OverallScore = &overall
 	}
+	node.LossGuardCap = tcpQualityLossGuardCap(node.Standard.LossPercent, scoreConfig)
+	node.Diagnostics = buildTCPQualityDiagnostics(node)
 	node.Rankable = node.OverallScore != nil
 	if !node.Rankable {
 		node.Reason = node.Standard.Reason
@@ -549,7 +582,10 @@ func buildTCPQualitySnapshotNode(task models.TCPQualityTask, hours int, client m
 	} else {
 		node.Grade = tcpQualityGrade(*node.OverallScore, scoreConfig)
 	}
-	node.Trend = buildTCPQualityTrend(task, hours, client.UUID, observations)
+	node.Trend, node.LargeTrend = buildTCPQualityTrends(task, hours, client.UUID, observations)
+	if !task.LargeEnabled {
+		node.LargeTrend = nil
+	}
 	return node
 }
 
@@ -590,18 +626,28 @@ func profileModeStats(aggregate tcpQualityAggregate, scores []float64, validTarg
 			aggregate.Sent >= minimumSamples,
 	}
 	if result.Rankable {
+		meanScore := mean(scores)
+		p20Score := quantile(scores, 0.20)
 		score := roundScore(weightedScore(
-			[2]float64{mean(scores), scoreConfig.ProfileMeanWeight},
-			[2]float64{quantile(scores, 0.20), scoreConfig.ProfileP20Weight},
+			[2]float64{meanScore, scoreConfig.ProfileMeanWeight},
+			[2]float64{p20Score, scoreConfig.ProfileP20Weight},
 		))
 		result.Score = &score
+		result.ScoreComponents = roundScoreMap(map[string]float64{
+			"target_mean": meanScore,
+			"target_p20":  p20Score,
+		})
+		result.ScoreInputs = map[string]float64{
+			"valid_targets":     float64(validTargets),
+			"available_targets": float64(availableTargets),
+		}
 	} else {
 		result.Reason = tcpQualityUnrankedReason(&result, scoreConfig, minimumSamples)
 	}
 	return result
 }
 
-func buildTCPQualityTrend(task models.TCPQualityTask, hours int, uuid string, observations []tcpQualityObservation) []tcpQualityTrendPoint {
+func buildTCPQualityTrends(task models.TCPQualityTask, hours int, uuid string, observations []tcpQualityObservation) ([]tcpQualityTrendPoint, []tcpQualityTrendPoint) {
 	windowSeconds := int64(hours * 3600)
 	bucketSeconds := int64(task.Interval)
 	if minimum := windowSeconds / 120; bucketSeconds < minimum {
@@ -610,9 +656,16 @@ func buildTCPQualityTrend(task models.TCPQualityTask, hours int, uuid string, ob
 	if bucketSeconds < 60 {
 		bucketSeconds = 60
 	}
-	buckets := make(map[int64]*tcpQualityAggregate)
+	bucketsByMode := map[string]map[int64]*tcpQualityAggregate{
+		"standard": {},
+		"large":    {},
+	}
 	for _, observation := range observations {
-		if observation.Client != uuid || observation.Result.Mode != "standard" {
+		if observation.Client != uuid {
+			continue
+		}
+		buckets, supportedMode := bucketsByMode[observation.Result.Mode]
+		if !supportedMode {
 			continue
 		}
 		bucket := observation.FinishedAt.Unix() / bucketSeconds * bucketSeconds
@@ -631,6 +684,10 @@ func buildTCPQualityTrend(task models.TCPQualityTask, hours int, uuid string, ob
 			aggregate.P95Samples = append(aggregate.P95Samples, weightedValue{observation.Result.P95LatencyMS, observation.Result.SamplesReceived})
 		}
 	}
+	return buildTCPQualityTrendPoints(bucketsByMode["standard"]), buildTCPQualityTrendPoints(bucketsByMode["large"])
+}
+
+func buildTCPQualityTrendPoints(buckets map[int64]*tcpQualityAggregate) []tcpQualityTrendPoint {
 	keys := make([]int64, 0, len(buckets))
 	for key := range buckets {
 		keys = append(keys, key)
@@ -982,6 +1039,52 @@ func applyTCPQualityLossGuard(score, loss float64, scoreConfig tcpQualityScoreCo
 	}
 }
 
+func tcpQualityLossGuardCap(loss float64, scoreConfig tcpQualityScoreConfig) *float64 {
+	var capValue float64
+	switch {
+	case loss >= scoreConfig.GuardSevereLossPercent:
+		capValue = scoreConfig.GuardSevereMaximumScore
+	case loss >= scoreConfig.GuardCriticalLossPercent:
+		capValue = scoreConfig.GuardCriticalMaximumScore
+	case loss >= scoreConfig.GuardWarningLossPercent:
+		capValue = scoreConfig.GuardWarningMaximumScore
+	default:
+		return nil
+	}
+	capValue = roundScore(capValue)
+	return &capValue
+}
+
+func buildTCPQualityDiagnostics(node tcpQualitySnapshotNode) []string {
+	result := make([]string, 0, 3)
+	if node.LossGuardCap != nil {
+		result = append(result, fmt.Sprintf("标准 SYN 首次响应丢失 %.2f%%，综合分最高 %.1f", node.Standard.LossPercent, *node.LossGuardCap))
+	} else if node.Standard.LossPercent >= 0.5 {
+		result = append(result, fmt.Sprintf("标准 SYN 首次响应丢失 %.2f%%，是主要扣分项", node.Standard.LossPercent))
+	}
+	if node.Standard.P95 >= 180 && len(result) < 3 {
+		result = append(result, fmt.Sprintf("标准 SYN P95 为 %.0fms，尾延迟偏高", node.Standard.P95))
+	}
+	if node.Large != nil && node.Large.Rankable && node.Standard.Rankable {
+		extraLoss := math.Max(0, node.Large.LossPercent-node.Standard.LossPercent)
+		ratio := node.Large.P95 / math.Max(node.Standard.P95, 1)
+		if extraLoss >= 1 && len(result) < 3 {
+			result = append(result, fmt.Sprintf("实验性大小包额外丢失 %.2f 个百分点", extraLoss))
+		}
+		if ratio >= 1.3 && len(result) < 3 {
+			result = append(result, fmt.Sprintf("实验性大小包 P95 为标准 SYN 的 %.2f 倍", ratio))
+		}
+	}
+	if components := node.Standard.ScoreComponents; len(result) < 3 && components != nil &&
+		components["target_mean"]-components["target_p20"] >= 15 {
+		result = append(result, "部分测试目标明显弱于平均水平")
+	}
+	if len(result) == 0 && node.Standard.Rankable {
+		result = append(result, "未发现明显短板，分数来自各项轻微扣分")
+	}
+	return result
+}
+
 func tcpQualityGrade(score float64, scoreConfig tcpQualityScoreConfig) string {
 	switch {
 	case score >= scoreConfig.ExcellentThreshold:
@@ -1052,6 +1155,14 @@ func clamp01(value float64) float64 {
 
 func roundScore(value float64) float64 {
 	return math.Round(value*10000) / 10000
+}
+
+func roundScoreMap(values map[string]float64) map[string]float64 {
+	result := make(map[string]float64, len(values))
+	for key, value := range values {
+		result[key] = roundScore(value)
+	}
+	return result
 }
 
 func maxInt(left, right int) int {

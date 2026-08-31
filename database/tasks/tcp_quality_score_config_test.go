@@ -18,8 +18,8 @@ func TestNormalizeTCPQualityScoreConfigRestoresInvalidWeightGroups(t *testing.T)
 	value.MinimumTargetCoveragePercent = 200
 
 	got := normalizeTCPQualityScoreConfig(value)
-	if got.StandardLossWeight != 55 || got.StandardP50Weight != 20 ||
-		got.StandardP95Weight != 15 || got.StandardCoverageWeight != 10 {
+	if got.StandardLossWeight != 60 || got.StandardP50Weight != 15 ||
+		got.StandardP95Weight != 25 || got.StandardCoverageWeight != 0 {
 		t.Fatalf("invalid standard weights were not reset: %#v", got)
 	}
 	if got.MinimumRuns != 1 {
@@ -33,19 +33,19 @@ func TestNormalizeTCPQualityScoreConfigRestoresInvalidWeightGroups(t *testing.T)
 func TestDefaultTCPQualityScoreConfigMatchesCaziBaseline(t *testing.T) {
 	config := defaultTCPQualityScoreConfig()
 
-	if config.ModelVersion != 4 {
-		t.Fatalf("model version = %d, want 4", config.ModelVersion)
+	if config.ModelVersion != 5 {
+		t.Fatalf("model version = %d, want 5", config.ModelVersion)
 	}
 	assertTCPScoreValue(t, "overall ICMP weight", config.OverallICMPWeight, 25)
-	assertTCPScoreValue(t, "overall standard weight", config.OverallStandardWeight, 45)
-	assertTCPScoreValue(t, "overall large weight", config.OverallLargeWeight, 30)
-	assertTCPScoreValue(t, "standard loss weight", config.StandardLossWeight, 55)
-	assertTCPScoreValue(t, "standard P50 weight", config.StandardP50Weight, 20)
-	assertTCPScoreValue(t, "standard P95 weight", config.StandardP95Weight, 15)
-	assertTCPScoreValue(t, "standard coverage weight", config.StandardCoverageWeight, 10)
-	assertTCPScoreValue(t, "large loss weight", config.LargeLossWeight, 55)
-	assertTCPScoreValue(t, "large extra loss weight", config.LargeExtraLossWeight, 25)
-	assertTCPScoreValue(t, "large P95 degradation weight", config.LargeP95DegradationWeight, 20)
+	assertTCPScoreValue(t, "overall standard weight", config.OverallStandardWeight, 65)
+	assertTCPScoreValue(t, "overall large weight", config.OverallLargeWeight, 10)
+	assertTCPScoreValue(t, "standard loss weight", config.StandardLossWeight, 60)
+	assertTCPScoreValue(t, "standard P50 weight", config.StandardP50Weight, 15)
+	assertTCPScoreValue(t, "standard P95 weight", config.StandardP95Weight, 25)
+	assertTCPScoreValue(t, "standard coverage weight", config.StandardCoverageWeight, 0)
+	assertTCPScoreValue(t, "large loss weight", config.LargeLossWeight, 0)
+	assertTCPScoreValue(t, "large extra loss weight", config.LargeExtraLossWeight, 65)
+	assertTCPScoreValue(t, "large P95 degradation weight", config.LargeP95DegradationWeight, 35)
 	assertTCPScoreValue(t, "large coverage weight", config.LargeCoverageWeight, 0)
 	assertTCPScoreValue(t, "excellent threshold", config.ExcellentThreshold, 90)
 	assertTCPScoreValue(t, "good threshold", config.GoodThreshold, 80)
@@ -71,10 +71,10 @@ func TestNormalizeTCPQualityScoreConfigKeepsAdministratorThresholds(t *testing.T
 func TestParseTCPQualityScoreConfigAcceptsNewerThemeModelVersion(t *testing.T) {
 	settings := map[string]json.RawMessage{
 		"tcpQualityScoreModelVersion": json.RawMessage(`99`),
-		"tcpOverallICMPWeight":       json.RawMessage(`21`),
-		"tcpExcellentThreshold":      json.RawMessage(`91`),
-		"tcpGoodThreshold":           json.RawMessage(`79`),
-		"tcpFairThreshold":           json.RawMessage(`58`),
+		"tcpOverallICMPWeight":        json.RawMessage(`21`),
+		"tcpExcellentThreshold":       json.RawMessage(`91`),
+		"tcpGoodThreshold":            json.RawMessage(`79`),
+		"tcpFairThreshold":            json.RawMessage(`58`),
 	}
 
 	config := parseTCPQualityScoreConfig(settings)
@@ -82,6 +82,49 @@ func TestParseTCPQualityScoreConfigAcceptsNewerThemeModelVersion(t *testing.T) {
 	assertTCPScoreValue(t, "excellent threshold", config.ExcellentThreshold, 91)
 	assertTCPScoreValue(t, "good threshold", config.GoodThreshold, 79)
 	assertTCPScoreValue(t, "fair threshold", config.FairThreshold, 58)
+}
+
+func TestParseTCPQualityScoreConfigMigratesLegacyWeightsOnly(t *testing.T) {
+	settings := map[string]json.RawMessage{
+		"tcpQualityScoreModelVersion": json.RawMessage(`4`),
+		"tcpOverallStandardWeight":    json.RawMessage(`45`),
+		"tcpOverallLargeWeight":       json.RawMessage(`30`),
+		"tcpStandardLossWeight":       json.RawMessage(`55`),
+		"tcpProfileMeanWeight":        json.RawMessage(`80`),
+		"tcpProfileP20Weight":         json.RawMessage(`20`),
+		"tcpExcellentThreshold":       json.RawMessage(`91`),
+		"tcpGoodThreshold":            json.RawMessage(`79`),
+		"tcpFairThreshold":            json.RawMessage(`58`),
+		"tcpMinimumRuns":              json.RawMessage(`5`),
+	}
+
+	config := parseTCPQualityScoreConfig(settings)
+	assertTCPScoreValue(t, "migrated standard weight", config.OverallStandardWeight, 65)
+	assertTCPScoreValue(t, "migrated large weight", config.OverallLargeWeight, 10)
+	assertTCPScoreValue(t, "migrated standard loss weight", config.StandardLossWeight, 60)
+	assertTCPScoreValue(t, "preserved profile mean weight", config.ProfileMeanWeight, 80)
+	assertTCPScoreValue(t, "preserved profile P20 weight", config.ProfileP20Weight, 20)
+	assertTCPScoreValue(t, "preserved excellent threshold", config.ExcellentThreshold, 91)
+	assertTCPScoreValue(t, "preserved good threshold", config.GoodThreshold, 79)
+	assertTCPScoreValue(t, "preserved fair threshold", config.FairThreshold, 58)
+	if config.MinimumRuns != 5 {
+		t.Fatalf("minimum runs = %d, want preserved value 5", config.MinimumRuns)
+	}
+}
+
+func TestParseTCPQualityScoreConfigMigratesUnversionedLegacyWeights(t *testing.T) {
+	settings := map[string]json.RawMessage{
+		"tcpOverallStandardWeight": json.RawMessage(`45`),
+		"tcpOverallLargeWeight":    json.RawMessage(`30`),
+		"tcpStandardLossWeight":    json.RawMessage(`55`),
+		"tcpExcellentThreshold":    json.RawMessage(`91`),
+	}
+
+	config := parseTCPQualityScoreConfig(settings)
+	assertTCPScoreValue(t, "migrated standard weight", config.OverallStandardWeight, 65)
+	assertTCPScoreValue(t, "migrated large weight", config.OverallLargeWeight, 10)
+	assertTCPScoreValue(t, "migrated standard loss weight", config.StandardLossWeight, 60)
+	assertTCPScoreValue(t, "preserved excellent threshold", config.ExcellentThreshold, 91)
 }
 
 func TestTCPQualityGradeUsesConfiguredThresholds(t *testing.T) {

@@ -9,7 +9,21 @@ import (
 	"github.com/komari-monitor/komari/internal/config"
 )
 
-const tcpQualityScoreModelVersion = 4
+const tcpQualityScoreModelVersion = 5
+
+var tcpQualityWeightSettingKeys = []string{
+	"tcpOverallICMPWeight",
+	"tcpOverallStandardWeight",
+	"tcpOverallLargeWeight",
+	"tcpStandardLossWeight",
+	"tcpStandardP50Weight",
+	"tcpStandardP95Weight",
+	"tcpStandardCoverageWeight",
+	"tcpLargeLossWeight",
+	"tcpLargeExtraLossWeight",
+	"tcpLargeP95DegradationWeight",
+	"tcpLargeCoverageWeight",
+}
 
 type tcpQualityScoreConfig struct {
 	ModelVersion                 int     `json:"tcpQualityScoreModelVersion"`
@@ -46,15 +60,15 @@ func defaultTCPQualityScoreConfig() tcpQualityScoreConfig {
 	return tcpQualityScoreConfig{
 		ModelVersion:                 tcpQualityScoreModelVersion,
 		OverallICMPWeight:            25,
-		OverallStandardWeight:        45,
-		OverallLargeWeight:           30,
-		StandardLossWeight:           55,
-		StandardP50Weight:            20,
-		StandardP95Weight:            15,
-		StandardCoverageWeight:       10,
-		LargeLossWeight:              55,
-		LargeExtraLossWeight:         25,
-		LargeP95DegradationWeight:    20,
+		OverallStandardWeight:        65,
+		OverallLargeWeight:           10,
+		StandardLossWeight:           60,
+		StandardP50Weight:            15,
+		StandardP95Weight:            25,
+		StandardCoverageWeight:       0,
+		LargeLossWeight:              0,
+		LargeExtraLossWeight:         65,
+		LargeP95DegradationWeight:    35,
 		LargeCoverageWeight:          0,
 		ProfileMeanWeight:            70,
 		ProfileP20Weight:             30,
@@ -97,7 +111,24 @@ func loadTCPQualityScoreConfig() tcpQualityScoreConfig {
 // independent frontend release cannot silently discard administrator values.
 func parseTCPQualityScoreConfig(settings map[string]json.RawMessage) tcpQualityScoreConfig {
 	defaults := defaultTCPQualityScoreConfig()
-	raw, err := json.Marshal(settings)
+	settingsToLoad := settings
+	var storedVersion int
+	if rawVersion, exists := settings["tcpQualityScoreModelVersion"]; exists {
+		_ = json.Unmarshal(rawVersion, &storedVersion)
+	}
+	if storedVersion < tcpQualityScoreModelVersion {
+		settingsToLoad = make(map[string]json.RawMessage, len(settings))
+		for key, value := range settings {
+			settingsToLoad[key] = value
+		}
+		// Version 5 changes the meaning and reliability of the large-packet
+		// component. Migrate only score weights while preserving administrator
+		// thresholds, guards, and sample requirements.
+		for _, key := range tcpQualityWeightSettingKeys {
+			delete(settingsToLoad, key)
+		}
+	}
+	raw, err := json.Marshal(settingsToLoad)
 	if err != nil {
 		return defaults
 	}

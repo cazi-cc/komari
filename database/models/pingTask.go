@@ -100,28 +100,29 @@ type PingTask struct {
 // selected by public catalog labels; concrete IP addresses and ports are never
 // stored in the task or exposed through public APIs.
 type TCPQualityTask struct {
-	Id               uint        `json:"id,omitempty" gorm:"primaryKey;autoIncrement"`
-	Name             string      `json:"name" gorm:"type:varchar(255);not null;index"`
-	Clients          StringArray `json:"clients" gorm:"type:longtext"`
-	DefaultOn        bool        `json:"default_on" gorm:"column:all_clients;not null;default:false"`
-	Enabled          bool        `json:"enabled" gorm:"not null;default:true"`
-	Interval         int         `json:"interval" gorm:"type:int;not null;default:900"`
-	ProvinceCodes    StringArray `json:"province_codes" gorm:"type:longtext"`
-	ISPCode          StringArray `json:"isp_codes" gorm:"column:isp_codes;type:longtext"`
-	IPVersions       StringArray `json:"ip_versions" gorm:"type:longtext"`
-	ICMPTaskIDs      StringArray `json:"icmp_task_ids" gorm:"type:longtext"`
-	StandardPackets  int         `json:"standard_packets" gorm:"type:int;not null;default:30"`
-	LargeEnabled     bool        `json:"large_enabled" gorm:"not null;default:false"`
-	LargePackets     int         `json:"large_packets" gorm:"type:int;not null;default:30"`
-	DelayMS          int         `json:"delay_ms" gorm:"type:int;not null;default:200"`
-	TimeoutMS        int         `json:"timeout_ms" gorm:"type:int;not null;default:3000"`
-	ICMPInterval     int         `json:"icmp_interval" gorm:"type:int;not null;default:60"`
-	SchedulePhaseMS  int64       `json:"-" gorm:"not null;default:-1"`
-	ScheduleInterval int         `json:"-" gorm:"not null;default:0"`
-	Diagnostic       bool        `json:"-" gorm:"not null;default:false;index"`
-	ExpiresAt        *time.Time  `json:"-" gorm:"index"`
-	CreatedAt        time.Time   `json:"created_at"`
-	UpdatedAt        time.Time   `json:"updated_at"`
+	Id                   uint        `json:"id,omitempty" gorm:"primaryKey;autoIncrement"`
+	Name                 string      `json:"name" gorm:"type:varchar(255);not null;index"`
+	Clients              StringArray `json:"clients" gorm:"type:longtext"`
+	DefaultOn            bool        `json:"default_on" gorm:"column:all_clients;not null;default:false"`
+	Enabled              bool        `json:"enabled" gorm:"not null;default:true"`
+	Interval             int         `json:"interval" gorm:"type:int;not null;default:900"`
+	ProvinceCodes        StringArray `json:"province_codes" gorm:"type:longtext"`
+	ISPCode              StringArray `json:"isp_codes" gorm:"column:isp_codes;type:longtext"`
+	IPVersions           StringArray `json:"ip_versions" gorm:"type:longtext"`
+	ICMPTaskIDs          StringArray `json:"icmp_task_ids" gorm:"type:longtext"`
+	StandardPackets      int         `json:"standard_packets" gorm:"type:int;not null;default:30"`
+	LargeEnabled         bool        `json:"large_enabled" gorm:"not null;default:false"`
+	LargePackets         int         `json:"large_packets" gorm:"type:int;not null;default:12"`
+	ExperimentalInterval int         `json:"experimental_interval" gorm:"type:int;not null;default:3600"`
+	DelayMS              int         `json:"delay_ms" gorm:"type:int;not null;default:200"`
+	TimeoutMS            int         `json:"timeout_ms" gorm:"type:int;not null;default:3000"`
+	ICMPInterval         int         `json:"icmp_interval" gorm:"type:int;not null;default:60"`
+	SchedulePhaseMS      int64       `json:"-" gorm:"not null;default:-1"`
+	ScheduleInterval     int         `json:"-" gorm:"not null;default:0"`
+	Diagnostic           bool        `json:"-" gorm:"not null;default:false;index"`
+	ExpiresAt            *time.Time  `json:"-" gorm:"index"`
+	CreatedAt            time.Time   `json:"created_at"`
+	UpdatedAt            time.Time   `json:"updated_at"`
 }
 
 func (task TCPQualityTask) AppliesToClient(uuid string) bool {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/komari-monitor/komari/database/dbcore"
 	"github.com/komari-monitor/komari/database/models"
+	"github.com/komari-monitor/komari/internal/config"
 	v2 "github.com/komari-monitor/komari/protocol/v2"
 	"github.com/komari-monitor/komari/utils"
 	"gorm.io/gorm"
@@ -96,7 +97,8 @@ func EditTCPQualityTask(task *models.TCPQualityTask) error {
 			"isp_codes": task.ISPCode, "ip_versions": task.IPVersions,
 			"standard_packets": task.StandardPackets, "large_enabled": task.LargeEnabled,
 			"large_packets": task.LargePackets, "delay_ms": task.DelayMS, "timeout_ms": task.TimeoutMS,
-			"icmp_interval": task.ICMPInterval, "schedule_phase_ms": -1, "schedule_interval": 0,
+			"experimental_interval": task.ExperimentalInterval,
+			"icmp_interval":         task.ICMPInterval, "schedule_phase_ms": -1, "schedule_interval": 0,
 		}
 		result := tx.Model(&models.TCPQualityTask{}).Where("id = ?", task.Id).Updates(updates)
 		if result.Error != nil {
@@ -162,9 +164,35 @@ func DeleteTCPQualityTasks(ids []uint) error {
 }
 
 func GetAllTCPQualityTasks() ([]models.TCPQualityTask, error) {
+	if err := migrateTCPQualityProbeV6Defaults(); err != nil {
+		return nil, err
+	}
 	var result []models.TCPQualityTask
 	err := dbcore.GetDBInstance().Where("diagnostic = ?", false).Order("id ASC").Find(&result).Error
 	return result, err
+}
+
+func migrateTCPQualityProbeV6Defaults() error {
+	const migrationKey = "tcp_quality_probe_v6_defaults_migrated"
+	migrated, err := config.GetAs[bool](migrationKey, false)
+	if err != nil {
+		return err
+	}
+	if migrated {
+		return nil
+	}
+	db := dbcore.GetDBInstance()
+	if err := db.Model(&models.TCPQualityTask{}).Where("experimental_interval IS NULL OR experimental_interval = 0").
+		Update("experimental_interval", 3600).Error; err != nil {
+		return err
+	}
+	// Thirty samples was the legacy mixed-payload default. V6 uses twelve
+	// independently randomized samples per payload tier once per hour.
+	if err := db.Model(&models.TCPQualityTask{}).Where("large_enabled = ? AND large_packets = ?", true, 30).
+		Update("large_packets", 12).Error; err != nil {
+		return err
+	}
+	return config.Set(migrationKey, true)
 }
 
 func ensureUniqueTCPQualityTarget(candidate models.TCPQualityTask, excludeID uint) error {
@@ -249,10 +277,7 @@ func validateTCPQualityResult(task models.TCPQualityTask, params v2.TCPQualityRe
 	if !validTCPQualityIdentifier(params.CatalogRevision, 64) {
 		return fmt.Errorf("invalid catalog_revision")
 	}
-	maxResults := len(task.ProvinceCodes) * len(task.ISPCode) * len(task.IPVersions)
-	if task.LargeEnabled {
-		maxResults *= 2
-	}
+	maxResults := len(task.ProvinceCodes) * len(task.ISPCode) * len(task.IPVersions) * 4
 	if len(params.Results) == 0 || len(params.Results) > maxResults {
 		return fmt.Errorf("invalid TCP quality result count")
 	}
@@ -261,8 +286,11 @@ func validateTCPQualityResult(task models.TCPQualityTask, params v2.TCPQualityRe
 		if !tcpQualityTargetAllowed(task, result.TargetKey) {
 			return fmt.Errorf("target %q is not part of the task", result.TargetKey)
 		}
-		if result.Mode != "standard" && (result.Mode != "large" || !task.LargeEnabled) {
+		if !validTCPQualityResultMode(result.Mode, task.LargeEnabled) {
 			return fmt.Errorf("invalid result mode %q", result.Mode)
+		}
+		if result.TargetFingerprint != "" && !validTCPQualityIdentifier(result.TargetFingerprint, 64) {
+			return fmt.Errorf("invalid target fingerprint for %q", result.TargetKey)
 		}
 		key := result.TargetKey + ":" + result.Mode
 		if _, exists := seen[key]; exists {
@@ -270,7 +298,7 @@ func validateTCPQualityResult(task models.TCPQualityTask, params v2.TCPQualityRe
 		}
 		seen[key] = struct{}{}
 		expected := task.StandardPackets
-		if result.Mode == "large" {
+		if result.Mode != "standard" {
 			expected = task.LargePackets
 		}
 		if result.SamplesSent < 0 || result.SamplesSent > expected ||
@@ -289,8 +317,28 @@ func validateTCPQualityResult(task models.TCPQualityTask, params v2.TCPQualityRe
 		if len(result.ErrorCode) > 64 || strings.ContainsAny(result.ErrorCode, "\r\n\t") {
 			return fmt.Errorf("invalid error code for %q", key)
 		}
+		if result.ControlSamplesSent < 0 || result.ControlSamplesSent > 20 ||
+			result.ControlSamplesReceived < 0 || result.ControlSamplesReceived > result.ControlSamplesSent ||
+			result.ControlLossRatio < 0 || result.ControlLossRatio > 1 {
+			return fmt.Errorf("invalid control counters for %q", key)
+		}
 	}
 	return nil
+}
+
+func validTCPQualityResultMode(mode string, experimentalEnabled bool) bool {
+	if mode == "standard" {
+		return true
+	}
+	if !experimentalEnabled {
+		return false
+	}
+	switch mode {
+	case "large", "experimental_standard", "payload_300", "payload_1050":
+		return true
+	default:
+		return false
+	}
 }
 
 func validTCPQualityIdentifier(value string, maxLength int) bool {
@@ -435,13 +483,13 @@ func RunTCPQualityCatalogDiagnostic(ctx context.Context, targetKey string, clien
 		Clients: models.StringArray(clients), Enabled: true, Interval: 900,
 		ProvinceCodes: models.StringArray{target.ProvinceCode}, ISPCode: models.StringArray{target.ISPCode},
 		IPVersions: models.StringArray{strconv.Itoa(target.IPVersion)}, StandardPackets: 30,
-		LargeEnabled: largeEnabled, LargePackets: 30, DelayMS: 200, TimeoutMS: 3000,
+		LargeEnabled: largeEnabled, LargePackets: 12, ExperimentalInterval: 3600, DelayMS: 200, TimeoutMS: 3000,
 		SchedulePhaseMS: -1, Diagnostic: true, ExpiresAt: &expiresAt,
 	}
 	if err := dbcore.GetDBInstance().WithContext(ctx).Create(&task).Error; err != nil {
 		return 0, err
 	}
-	if err := utils.ExecuteTCPQualityTask(ctx, task); err != nil {
+	if err := utils.ExecuteTCPQualityTaskForced(ctx, task); err != nil {
 		_ = dbcore.GetDBInstance().Delete(&models.TCPQualityTask{}, task.Id).Error
 		return 0, err
 	}
@@ -698,7 +746,7 @@ func RunTCPQualityTaskNow(ctx context.Context, id uint) error {
 	if err != nil {
 		return err
 	}
-	return utils.ExecuteTCPQualityTask(ctx, task)
+	return utils.ExecuteTCPQualityTaskForced(ctx, task)
 }
 
 func AddDefaultTCPQualityClientUUID(uuid string) error {

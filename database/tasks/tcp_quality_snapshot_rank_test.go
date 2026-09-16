@@ -177,6 +177,26 @@ func TestTCPQualityDiagnosticsExplainLossGuardAndLargeImpact(t *testing.T) {
 	}
 }
 
+func TestTCPQualityPayloadCommonIncidentIsExcludedAndKeepsResilientNode(t *testing.T) {
+	task := models.TCPQualityTask{Interval: 900}
+	finishedAt := time.Unix(9*3600, 0).UTC()
+	observations := make([]tcpQualityObservation, 0, 8)
+	for index, client := range []string{"node-a", "node-b", "node-c", "node-d"} {
+		observations = append(observations,
+			tcpQualityObservation{Client: client, FinishedAt: finishedAt, Result: v2.TCPQualityTargetResult{TargetKey: "fj-cm-v4", Mode: "experimental_standard", LossRatio: 0}},
+			tcpQualityObservation{Client: client, FinishedAt: finishedAt, Result: v2.TCPQualityTargetResult{TargetKey: "fj-cm-v4", Mode: "payload_1050", LossRatio: []float64{0.3, 0.4, 0.5, 0.02}[index]}},
+		)
+	}
+	excluded, _, events := detectTCPQualityReferenceOutages(task, observations, 4, defaultTCPQualityScoreConfig())
+	key := tcpQualityOutageBucketKey(task, observations[1])
+	if _, ok := excluded[key]; !ok {
+		t.Fatalf("common payload incident bucket %q was not excluded", key)
+	}
+	if len(events) != 1 || len(events[0].ResilientNodes) != 1 || events[0].ResilientNodes[0] != "node-d" {
+		t.Fatalf("unexpected resilience event: %#v", events)
+	}
+}
+
 func testRankPointer(value int) *int {
 	return &value
 }

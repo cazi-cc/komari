@@ -114,13 +114,14 @@ func publicGetTCPQualityTasks(_ context.Context, _ *rpc.JsonRpcRequest) (any, *r
 		return nil, rpc.MakeError(rpc.InternalError, err.Error(), nil)
 	}
 	type publicTask struct {
-		ID            uint     `json:"id"`
-		Name          string   `json:"name"`
-		ProvinceCodes []string `json:"province_codes"`
-		ISPCodes      []string `json:"isp_codes"`
-		IPVersions    []string `json:"ip_versions"`
-		LargeEnabled  bool     `json:"large_enabled"`
-		ICMPTaskID    uint     `json:"icmp_task_id"`
+		ID                   uint     `json:"id"`
+		Name                 string   `json:"name"`
+		ProvinceCodes        []string `json:"province_codes"`
+		ISPCodes             []string `json:"isp_codes"`
+		IPVersions           []string `json:"ip_versions"`
+		LargeEnabled         bool     `json:"large_enabled"`
+		ExperimentalInterval int      `json:"experimental_interval"`
+		ICMPTaskID           uint     `json:"icmp_task_id"`
 	}
 	result := make([]publicTask, 0, len(taskList))
 	for _, task := range taskList {
@@ -128,13 +129,14 @@ func publicGetTCPQualityTasks(_ context.Context, _ *rpc.JsonRpcRequest) (any, *r
 			continue
 		}
 		result = append(result, publicTask{
-			ID:            task.Id,
-			Name:          task.Name,
-			ProvinceCodes: append([]string(nil), task.ProvinceCodes...),
-			ISPCodes:      append([]string(nil), task.ISPCode...),
-			IPVersions:    append([]string(nil), task.IPVersions...),
-			LargeEnabled:  task.LargeEnabled,
-			ICMPTaskID:    firstPublicTCPQualityICMPTaskID(task.ICMPTaskIDs),
+			ID:                   task.Id,
+			Name:                 task.Name,
+			ProvinceCodes:        append([]string(nil), task.ProvinceCodes...),
+			ISPCodes:             append([]string(nil), task.ISPCode...),
+			IPVersions:           append([]string(nil), task.IPVersions...),
+			LargeEnabled:         task.LargeEnabled,
+			ExperimentalInterval: task.ExperimentalInterval,
+			ICMPTaskID:           firstPublicTCPQualityICMPTaskID(task.ICMPTaskIDs),
 		})
 	}
 	return result, nil

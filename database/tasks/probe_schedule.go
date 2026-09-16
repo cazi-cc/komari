@@ -265,11 +265,12 @@ func pingProbeDurationMS(task models.PingTask) int64 {
 
 func tcpQualityDurationMS(task models.TCPQualityTask) int64 {
 	targets := len(task.ProvinceCodes) * len(task.ISPCode) * len(task.IPVersions)
-	packets := targets * task.StandardPackets
+	standardDuration := int64(targets*task.StandardPackets*probeMaxInt(task.DelayMS, 50)) / 4
+	experimentalDuration := int64(0)
 	if task.LargeEnabled {
-		packets += targets * task.LargePackets
+		experimentalDuration = int64((targets*task.LargePackets*3 + 5) * probeMaxInt(task.DelayMS, 50))
 	}
-	return max64(1000, int64(packets*probeMaxInt(task.DelayMS, 50)/4))
+	return max64(1000, standardDuration+experimentalDuration)
 }
 
 func unlockQualityDurationMS(task models.UnlockQualityTask) int64 {

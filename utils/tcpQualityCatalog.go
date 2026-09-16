@@ -2,6 +2,8 @@ package utils
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -12,18 +14,23 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/komari-monitor/komari/database/dbcore"
 	"github.com/komari-monitor/komari/database/models"
+	"github.com/komari-monitor/komari/internal/config"
 	v2 "github.com/komari-monitor/komari/protocol/v2"
 )
 
 const (
-	tcpQualityCatalogURL      = "https://tcpquality.ibsgss.uk/getNodes"
-	tcpQualityCatalogMaxAge   = 10 * time.Minute
-	tcpQualityCatalogMaxBytes = 4 << 20
+	tcpQualityCatalogURL       = "https://tcpquality.ibsgss.uk/getNodes"
+	tcpQualityCatalogMaxAge    = 10 * time.Minute
+	tcpQualityCatalogMaxBytes  = 4 << 20
+	tcpQualityCatalogSecretKey = "tcp_quality_catalog_fingerprint_secret"
 )
+
+var tcpQualityCatalogSecretMu sync.Mutex
 
 type tcpQualityProviderCatalog struct {
 	Version     int                        `json:"version"`
@@ -63,6 +70,7 @@ type TCPQualityAdminCatalogView struct {
 
 type TCPQualityTargetLabel struct {
 	Key          string `json:"key"`
+	Fingerprint  string `json:"-"`
 	Province     string `json:"province"`
 	ProvinceCode string `json:"province_code"`
 	ISP          string `json:"isp"`
@@ -123,6 +131,7 @@ func GetTCPQualityTargetLabels(ctx context.Context, task models.TCPQualityTask) 
 	for _, target := range selected {
 		labels = append(labels, TCPQualityTargetLabel{
 			Key:          target.Key,
+			Fingerprint:  target.Fingerprint,
 			Province:     target.Province,
 			ProvinceCode: target.ProvinceCode,
 			ISP:          target.ISP,
@@ -182,13 +191,17 @@ func fetchTCPQualityCatalog(ctx context.Context) (models.TCPQualityCatalogCache,
 	if len(payload) > tcpQualityCatalogMaxBytes {
 		return models.TCPQualityCatalogCache{}, fmt.Errorf("catalog exceeds %d bytes", tcpQualityCatalogMaxBytes)
 	}
-	if _, err := parseTCPQualityCatalog(payload); err != nil {
+	targets, err := parseTCPQualityCatalog(payload)
+	if err != nil {
 		return models.TCPQualityCatalogCache{}, err
 	}
-	hash := sha256.Sum256(payload)
+	revision, err := stableTCPQualityCatalogRevision(targets)
+	if err != nil {
+		return models.TCPQualityCatalogCache{}, err
+	}
 	return models.TCPQualityCatalogCache{
 		Id:           1,
-		Revision:     hex.EncodeToString(hash[:8]),
+		Revision:     revision,
 		Payload:      string(payload),
 		LastSyncedAt: time.Now().UTC(),
 	}, nil
@@ -207,6 +220,13 @@ func decodeTCPQualityCatalogCache(cached models.TCPQualityCatalogCache) (tcpQual
 	targets, err := parseTCPQualityCatalog([]byte(cached.Payload))
 	if err != nil {
 		return tcpQualityCatalogState{}, err
+	}
+	secret, err := tcpQualityCatalogSecret()
+	if err != nil {
+		return tcpQualityCatalogState{}, err
+	}
+	for index := range targets {
+		targets[index].Fingerprint = tcpQualityTargetFingerprint(secret, targets[index])
 	}
 	provinces := make(map[string]string)
 	isps := make(map[string]string)
@@ -235,6 +255,47 @@ func decodeTCPQualityCatalogCache(cached models.TCPQualityCatalogCache) (tcpQual
 	sort.Slice(view.ISPs, func(i, j int) bool { return view.ISPs[i].Code < view.ISPs[j].Code })
 	sort.Ints(view.IPVersions)
 	return tcpQualityCatalogState{View: view, Targets: targets}, nil
+}
+
+func stableTCPQualityCatalogRevision(targets []v2.TCPQualityTarget) (string, error) {
+	secret, err := tcpQualityCatalogSecret()
+	if err != nil {
+		return "", err
+	}
+	canonical := make([]string, 0, len(targets))
+	for _, target := range targets {
+		canonical = append(canonical, fmt.Sprintf("%s|%s|%d|%s|%s|%d",
+			target.Key, target.Address, target.Port, target.ProvinceCode, target.ISPCode, target.IPVersion))
+	}
+	sort.Strings(canonical)
+	mac := hmac.New(sha256.New, secret)
+	_, _ = mac.Write([]byte(strings.Join(canonical, "\n")))
+	return hex.EncodeToString(mac.Sum(nil)[:12]), nil
+}
+
+func tcpQualityTargetFingerprint(secret []byte, target v2.TCPQualityTarget) string {
+	mac := hmac.New(sha256.New, secret)
+	_, _ = fmt.Fprintf(mac, "%s|%d|%d", target.Address, target.Port, target.IPVersion)
+	return hex.EncodeToString(mac.Sum(nil)[:12])
+}
+
+func tcpQualityCatalogSecret() ([]byte, error) {
+	tcpQualityCatalogSecretMu.Lock()
+	defer tcpQualityCatalogSecretMu.Unlock()
+	stored, err := config.GetAs[string](tcpQualityCatalogSecretKey)
+	if err == nil {
+		if decoded, decodeErr := hex.DecodeString(strings.TrimSpace(stored)); decodeErr == nil && len(decoded) == 32 {
+			return decoded, nil
+		}
+	}
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return nil, fmt.Errorf("generate TCP quality fingerprint secret: %w", err)
+	}
+	if err := config.Set(tcpQualityCatalogSecretKey, hex.EncodeToString(secret)); err != nil {
+		return nil, fmt.Errorf("store TCP quality fingerprint secret: %w", err)
+	}
+	return secret, nil
 }
 
 func parseTCPQualityCatalog(payload []byte) ([]v2.TCPQualityTarget, error) {
@@ -324,10 +385,16 @@ func NormalizeTCPQualityTask(task *models.TCPQualityTask) (int, int, error) {
 		return 0, 0, fmt.Errorf("standard_packets must be between 10 and 200")
 	}
 	if task.LargePackets == 0 {
-		task.LargePackets = 30
+		task.LargePackets = 12
 	}
 	if task.LargePackets < 10 || task.LargePackets > 100 {
 		return 0, 0, fmt.Errorf("large_packets must be between 10 and 100")
+	}
+	if task.ExperimentalInterval == 0 {
+		task.ExperimentalInterval = 3600
+	}
+	if task.ExperimentalInterval < task.Interval || task.ExperimentalInterval < 900 || task.ExperimentalInterval > 86400 {
+		return 0, 0, fmt.Errorf("experimental_interval must be between max(interval, 900) and 86400 seconds")
 	}
 	if task.DelayMS == 0 {
 		task.DelayMS = 200
@@ -352,9 +419,6 @@ func NormalizeTCPQualityTask(task *models.TCPQualityTask) (int, int, error) {
 		return targetCount, 0, fmt.Errorf("icmp_interval must be between 5 and 86400 seconds")
 	}
 	packetCount := targetCount * task.StandardPackets
-	if task.LargeEnabled {
-		packetCount += targetCount * task.LargePackets
-	}
 	minimumInterval := MinimumTCPQualityInterval(packetCount)
 	if task.Interval < minimumInterval {
 		return targetCount, packetCount, fmt.Errorf("interval must be at least %d seconds for %d packets per node", minimumInterval, packetCount)

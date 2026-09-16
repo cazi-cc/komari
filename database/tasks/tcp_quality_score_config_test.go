@@ -33,12 +33,12 @@ func TestNormalizeTCPQualityScoreConfigRestoresInvalidWeightGroups(t *testing.T)
 func TestDefaultTCPQualityScoreConfigMatchesCaziBaseline(t *testing.T) {
 	config := defaultTCPQualityScoreConfig()
 
-	if config.ModelVersion != 5 {
-		t.Fatalf("model version = %d, want 5", config.ModelVersion)
+	if config.ModelVersion != 6 {
+		t.Fatalf("model version = %d, want 6", config.ModelVersion)
 	}
 	assertTCPScoreValue(t, "overall ICMP weight", config.OverallICMPWeight, 25)
 	assertTCPScoreValue(t, "overall standard weight", config.OverallStandardWeight, 65)
-	assertTCPScoreValue(t, "overall large weight", config.OverallLargeWeight, 10)
+	assertTCPScoreValue(t, "overall large weight", config.OverallLargeWeight, 0)
 	assertTCPScoreValue(t, "standard loss weight", config.StandardLossWeight, 60)
 	assertTCPScoreValue(t, "standard P50 weight", config.StandardP50Weight, 15)
 	assertTCPScoreValue(t, "standard P95 weight", config.StandardP95Weight, 25)
@@ -100,7 +100,7 @@ func TestParseTCPQualityScoreConfigMigratesLegacyWeightsOnly(t *testing.T) {
 
 	config := parseTCPQualityScoreConfig(settings)
 	assertTCPScoreValue(t, "migrated standard weight", config.OverallStandardWeight, 65)
-	assertTCPScoreValue(t, "migrated large weight", config.OverallLargeWeight, 10)
+	assertTCPScoreValue(t, "migrated large weight", config.OverallLargeWeight, 0)
 	assertTCPScoreValue(t, "migrated standard loss weight", config.StandardLossWeight, 60)
 	assertTCPScoreValue(t, "preserved profile mean weight", config.ProfileMeanWeight, 80)
 	assertTCPScoreValue(t, "preserved profile P20 weight", config.ProfileP20Weight, 20)
@@ -122,7 +122,7 @@ func TestParseTCPQualityScoreConfigMigratesUnversionedLegacyWeights(t *testing.T
 
 	config := parseTCPQualityScoreConfig(settings)
 	assertTCPScoreValue(t, "migrated standard weight", config.OverallStandardWeight, 65)
-	assertTCPScoreValue(t, "migrated large weight", config.OverallLargeWeight, 10)
+	assertTCPScoreValue(t, "migrated large weight", config.OverallLargeWeight, 0)
 	assertTCPScoreValue(t, "migrated standard loss weight", config.StandardLossWeight, 60)
 	assertTCPScoreValue(t, "preserved excellent threshold", config.ExcellentThreshold, 91)
 }

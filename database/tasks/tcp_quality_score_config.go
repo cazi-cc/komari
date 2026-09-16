@@ -9,7 +9,7 @@ import (
 	"github.com/komari-monitor/komari/internal/config"
 )
 
-const tcpQualityScoreModelVersion = 5
+const tcpQualityScoreModelVersion = 6
 
 var tcpQualityWeightSettingKeys = []string{
 	"tcpOverallICMPWeight",
@@ -61,7 +61,7 @@ func defaultTCPQualityScoreConfig() tcpQualityScoreConfig {
 		ModelVersion:                 tcpQualityScoreModelVersion,
 		OverallICMPWeight:            25,
 		OverallStandardWeight:        65,
-		OverallLargeWeight:           10,
+		OverallLargeWeight:           0,
 		StandardLossWeight:           60,
 		StandardP50Weight:            15,
 		StandardP95Weight:            25,
@@ -121,9 +121,9 @@ func parseTCPQualityScoreConfig(settings map[string]json.RawMessage) tcpQualityS
 		for key, value := range settings {
 			settingsToLoad[key] = value
 		}
-		// Version 5 changes the meaning and reliability of the large-packet
-		// component. Migrate only score weights while preserving administrator
-		// thresholds, guards, and sample requirements.
+		// Version 6 makes SYN payload compatibility diagnostic-only by default.
+		// Migrate score weights while preserving administrator thresholds,
+		// guards, and sample requirements.
 		for _, key := range tcpQualityWeightSettingKeys {
 			delete(settingsToLoad, key)
 		}

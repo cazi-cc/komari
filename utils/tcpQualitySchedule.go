@@ -48,6 +48,14 @@ func ReloadTCPQualitySchedule(taskList []models.TCPQualityTask) error {
 }
 
 func ExecuteTCPQualityTask(ctx context.Context, task models.TCPQualityTask) error {
+	return executeTCPQualityTask(ctx, task, false)
+}
+
+func ExecuteTCPQualityTaskForced(ctx context.Context, task models.TCPQualityTask) error {
+	return executeTCPQualityTask(ctx, task, true)
+}
+
+func executeTCPQualityTask(ctx context.Context, task models.TCPQualityTask, forceExperimental bool) error {
 	if !task.Enabled {
 		return fmt.Errorf("TCP quality task is disabled")
 	}
@@ -59,12 +67,17 @@ func ExecuteTCPQualityTask(ctx context.Context, task models.TCPQualityTask) erro
 	if len(targets) == 0 {
 		return fmt.Errorf("TCP quality task has no available catalog targets")
 	}
+	experimentalDue := task.LargeEnabled && (forceExperimental || tcpQualityExperimentalDue(task, time.Now().UTC()))
+	parallel := tcpQualityMaxParallel
+	if experimentalDue {
+		parallel = 1
+	}
 	for _, clientUUID := range task.Clients {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		runID := newTCPQualityRunID()
-		if !beginTCPQualityRun(task, clientUUID, runID, len(targets)) {
+		if !beginTCPQualityRun(task, clientUUID, runID, len(targets), experimentalDue) {
 			continue
 		}
 		params := v2.TCPQualityParams{
@@ -73,11 +86,17 @@ func ExecuteTCPQualityTask(ctx context.Context, task models.TCPQualityTask) erro
 			CatalogRevision: catalog.View.Revision,
 			Targets:         append([]v2.TCPQualityTarget(nil), targets...),
 			StandardPackets: task.StandardPackets,
-			LargeEnabled:    task.LargeEnabled,
-			LargePackets:    task.LargePackets,
-			DelayMS:         task.DelayMS,
-			TimeoutMS:       task.TimeoutMS,
-			MaxParallel:     tcpQualityMaxParallel,
+			// Old agents ignore the v6 fields below. Keeping this false prevents
+			// them from running the legacy mixed-payload probe during rollout.
+			LargeEnabled:               false,
+			LargePackets:               task.LargePackets,
+			ExperimentalEnabled:        task.LargeEnabled,
+			ExperimentalDue:            experimentalDue,
+			ExperimentalPackets:        task.LargePackets,
+			ExperimentalControlPackets: 5,
+			DelayMS:                    task.DelayMS,
+			TimeoutMS:                  task.TimeoutMS,
+			MaxParallel:                parallel,
 		}
 		if !agent_runtime.DispatchV2Event(clientUUID, v2.MethodAgentTCPQuality, params) {
 			CompleteTCPQualityRun(task.Id, clientUUID, runID)
@@ -86,12 +105,13 @@ func ExecuteTCPQualityTask(ctx context.Context, task models.TCPQualityTask) erro
 	return nil
 }
 
-func beginTCPQualityRun(task models.TCPQualityTask, clientUUID, runID string, targetCount int) bool {
+func beginTCPQualityRun(task models.TCPQualityTask, clientUUID, runID string, targetCount int, experimentalDue bool) bool {
 	key := tcpQualityRunKey(task.Id, clientUUID)
 	now := time.Now().UTC()
 	packetCount := targetCount * task.StandardPackets
-	if task.LargeEnabled {
-		packetCount += targetCount * task.LargePackets
+	if experimentalDue {
+		packetCount += targetCount * task.LargePackets * 3
+		packetCount += 5
 	}
 	estimated := time.Duration(packetCount) * time.Duration(task.DelayMS+task.TimeoutMS) * time.Millisecond / tcpQualityMaxParallel
 	if estimated < 15*time.Minute {
@@ -111,6 +131,27 @@ func beginTCPQualityRun(task models.TCPQualityTask, clientUUID, runID string, ta
 		expiresAt: now.Add(estimated),
 	}
 	return true
+}
+
+func tcpQualityExperimentalDue(task models.TCPQualityTask, now time.Time) bool {
+	interval := task.Interval
+	if interval < 1 {
+		return false
+	}
+	experimentalInterval := task.ExperimentalInterval
+	if experimentalInterval < interval {
+		experimentalInterval = interval
+	}
+	every := (experimentalInterval + interval - 1) / interval
+	if every <= 1 {
+		return true
+	}
+	phaseMS := task.SchedulePhaseMS
+	if phaseMS < 0 {
+		phaseMS = 0
+	}
+	slot := (now.UnixMilli() - phaseMS) / int64(interval*1000)
+	return slot%int64(every) == 0
 }
 
 func CompleteTCPQualityRun(taskID uint, clientUUID, runID string) {

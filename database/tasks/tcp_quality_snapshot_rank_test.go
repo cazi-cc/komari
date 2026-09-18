@@ -200,10 +200,13 @@ func TestTCPQualityPayloadCommonIncidentIsExcludedAndKeepsResilientNode(t *testi
 func TestTCPQualityTargetSelectionSurvivesEndpointRotation(t *testing.T) {
 	labelKeys := map[string]struct{}{"fj-cm-v6": {}}
 
-	if !tcpQualityTargetKeySelected(labelKeys, "fj-cm-v6") {
-		t.Fatal("stable target key should remain selected after catalog endpoint rotation")
+	for _, fingerprint := range []string{"old-endpoint", "rotated-endpoint"} {
+		result := v2.TCPQualityTargetResult{TargetKey: "fj-cm-v6", TargetFingerprint: fingerprint}
+		if !tcpQualityResultMatchesSelectedTarget(labelKeys, result) {
+			t.Fatalf("stable target key with fingerprint %q was rejected", fingerprint)
+		}
 	}
-	if tcpQualityTargetKeySelected(labelKeys, "fj-cm-v4") {
+	if tcpQualityResultMatchesSelectedTarget(labelKeys, v2.TCPQualityTargetResult{TargetKey: "fj-cm-v4", TargetFingerprint: "rotated-endpoint"}) {
 		t.Fatal("a different target key must not be selected")
 	}
 }

@@ -242,7 +242,7 @@ func buildTCPQualitySnapshot(ctx context.Context, task models.TCPQualityTask, ho
 			if !tcpQualityResultUsable(result) {
 				continue
 			}
-			if !tcpQualityTargetKeySelected(labelKeys, result.TargetKey) {
+			if !tcpQualityResultMatchesSelectedTarget(labelKeys, result) {
 				continue
 			}
 			// The public target key (province/ISP/IP family) is the stable
@@ -354,8 +354,8 @@ func buildTCPQualitySnapshot(ctx context.Context, task models.TCPQualityTask, ho
 	return snapshot, nil
 }
 
-func tcpQualityTargetKeySelected(labelKeys map[string]struct{}, targetKey string) bool {
-	_, selected := labelKeys[targetKey]
+func tcpQualityResultMatchesSelectedTarget(labelKeys map[string]struct{}, result v2.TCPQualityTargetResult) bool {
+	_, selected := labelKeys[result.TargetKey]
 	return selected
 }
 

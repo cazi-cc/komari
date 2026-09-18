@@ -293,7 +293,7 @@ func buildTCPQualitySnapshot(ctx context.Context, task models.TCPQualityTask, ho
 		Targets:            labels,
 		ExcludedTargetKeys: sortedSetKeys(excludedTargets),
 		ScoreModel: tcpQualityScoreModel{
-			Version: "tcp-quality-v6",
+			Version: "tcp-quality-v7",
 			Weights: map[string]any{
 				"overall_with_large": map[string]float64{
 					"icmp": scoreConfig.OverallICMPWeight, "tcp_standard": scoreConfig.OverallStandardWeight,
@@ -733,6 +733,9 @@ func buildTCPQualitySnapshotNode(task models.TCPQualityTask, hours int, client m
 		} else if legacyLarge.Runs > 0 {
 			node.Large = &legacyLarge
 		}
+		// A payload score is only authoritative when both payload sizes have a
+		// valid, paired baseline. A single surviving size is diagnostic data,
+		// not evidence that the whole experiment is representative.
 		node.LargeScore = combinedTCPQualityExperimentalScore(node.Payload300, node.Payload1050, node.Large)
 	}
 	if node.TCPStandardScore != nil {
@@ -852,22 +855,21 @@ func accumulateTCPQualityProfileMode(aggregate *tcpQualityAggregate, scores *[]f
 }
 
 func combinedTCPQualityExperimentalScore(payload300, payload1050, legacy *tcpQualityModeStats) *float64 {
-	values := make([][2]float64, 0, 2)
-	if payload300 != nil && payload300.Score != nil {
-		values = append(values, [2]float64{*payload300.Score, 40})
+	// The recommended model compares both payload sizes against the same-round
+	// no-payload baseline. Do not reweight a single surviving size: doing so
+	// would turn an incomplete experiment into a real score.
+	if payload300 != nil && payload300.Score != nil && payload1050 != nil && payload1050.Score != nil {
+		value := roundScore(weightedScore(
+			[2]float64{*payload300.Score, 40},
+			[2]float64{*payload1050.Score, 60},
+		))
+		return &value
 	}
-	if payload1050 != nil && payload1050.Score != nil {
-		values = append(values, [2]float64{*payload1050.Score, 60})
-	}
-	if len(values) == 0 && legacy != nil && legacy.Score != nil {
+	if payload300 == nil && payload1050 == nil && legacy != nil && legacy.Score != nil {
 		value := roundScore(*legacy.Score)
 		return &value
 	}
-	if len(values) == 0 {
-		return nil
-	}
-	value := roundScore(weightedScore(values...))
-	return &value
+	return nil
 }
 
 func accumulateModeStats(aggregate *tcpQualityAggregate, stats *tcpQualityModeStats) {
@@ -1355,7 +1357,9 @@ func buildTCPQualityDiagnosticsWithConfig(node tcpQualitySnapshotNode, scoreConf
 		result = append(result, fmt.Sprintf("标准 SYN P95 为 %.0fms，尾延迟偏高", node.Standard.P95))
 	}
 	if scoreConfig.OverallLargeWeight == 0 && (node.Payload300 != nil || node.Payload1050 != nil) {
-		result = append(result, "SYN 载荷兼容性仅作诊断，当前不计入综合分")
+		result = append(result, "SYN 载荷兼容性保留作诊断，当前权重为 0，不计入综合分")
+	} else if scoreConfig.OverallLargeWeight > 0 && (node.Payload300 != nil || node.Payload1050 != nil) && node.LargeScore == nil && len(result) < 5 {
+		result = append(result, "SYN 载荷实验数据不完整，未计入综合分；当前分数按 ICMP 与标准 SYN 计算")
 	}
 	for _, payload := range []struct {
 		label string

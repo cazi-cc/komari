@@ -211,6 +211,65 @@ func TestTCPQualityTargetSelectionSurvivesEndpointRotation(t *testing.T) {
 	}
 }
 
+func TestTCPQualityPayloadContributionIsBoundedByRecommendedWeight(t *testing.T) {
+	config := defaultTCPQualityScoreConfig()
+	if config.OverallLargeWeight != 10 {
+		t.Fatalf("payload overall weight = %.1f, want 10", config.OverallLargeWeight)
+	}
+
+	best := weightedScore(
+		[2]float64{100, config.OverallICMPWeight},
+		[2]float64{100, config.OverallStandardWeight},
+		[2]float64{100, config.OverallLargeWeight},
+	)
+	worstPayload := weightedScore(
+		[2]float64{100, config.OverallICMPWeight},
+		[2]float64{100, config.OverallStandardWeight},
+		[2]float64{0, config.OverallLargeWeight},
+	)
+	if best != 100 || worstPayload != 90 {
+		t.Fatalf("payload contribution changed by %.1f points, want a maximum 10-point impact", best-worstPayload)
+	}
+}
+
+func TestTCPQualityPayloadScoreRequiresBothExperimentalSizes(t *testing.T) {
+	partial := combinedTCPQualityExperimentalScore(
+		&tcpQualityModeStats{Score: testScorePointer(80)},
+		nil,
+		nil,
+	)
+	if partial != nil {
+		t.Fatalf("partial payload experiment score = %.1f, want nil", *partial)
+	}
+
+	complete := combinedTCPQualityExperimentalScore(
+		&tcpQualityModeStats{Score: testScorePointer(80)},
+		&tcpQualityModeStats{Score: testScorePointer(60)},
+		nil,
+	)
+	if complete == nil || *complete != 68 {
+		t.Fatalf("complete payload experiment score = %v, want 68", complete)
+	}
+
+	legacy := combinedTCPQualityExperimentalScore(nil, nil, &tcpQualityModeStats{Score: testScorePointer(72.5)})
+	if legacy == nil || *legacy != 72.5 {
+		t.Fatalf("legacy payload experiment score = %v, want 72.5", legacy)
+	}
+
+	legacyWithPartialModern := combinedTCPQualityExperimentalScore(
+		&tcpQualityModeStats{Score: testScorePointer(80)},
+		nil,
+		&tcpQualityModeStats{Score: testScorePointer(72.5)},
+	)
+	if legacyWithPartialModern != nil {
+		t.Fatalf("mixed partial payload experiment score = %.1f, want nil", *legacyWithPartialModern)
+	}
+}
+
 func testRankPointer(value int) *int {
+	return &value
+}
+
+func testScorePointer(value float64) *float64 {
 	return &value
 }

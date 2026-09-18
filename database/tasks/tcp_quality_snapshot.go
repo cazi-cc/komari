@@ -212,9 +212,9 @@ func buildTCPQualitySnapshot(ctx context.Context, task models.TCPQualityTask, ho
 	if err != nil {
 		return tcpQualitySnapshot{}, err
 	}
-	labelKeys := make(map[string]string, len(labels))
+	labelKeys := make(map[string]struct{}, len(labels))
 	for _, label := range labels {
-		labelKeys[label.Key] = label.Fingerprint
+		labelKeys[label.Key] = struct{}{}
 	}
 	runs, err := ListTCPQualityRuns(ctx, task.Id, start)
 	if err != nil {
@@ -242,17 +242,15 @@ func buildTCPQualitySnapshot(ctx context.Context, task models.TCPQualityTask, ho
 			if !tcpQualityResultUsable(result) {
 				continue
 			}
-			expectedFingerprint, selected := labelKeys[result.TargetKey]
-			if !selected {
+			if !tcpQualityTargetKeySelected(labelKeys, result.TargetKey) {
 				continue
 			}
-			if result.TargetFingerprint != expectedFingerprint {
-				// Results without a target fingerprint are legacy data. Only retain
-				// them while their exact catalog revision is still current.
-				if result.TargetFingerprint != "" || run.CatalogRevision != currentRevision {
-					continue
-				}
-			}
+			// The public target key (province/ISP/IP family) is the stable
+			// identity of a catalog target. Providers may rotate the concrete
+			// endpoint while keeping that label, so an endpoint fingerprint must
+			// not make otherwise valid samples disappear from the rolling window.
+			// Fingerprints and catalog revisions remain in the stored run for
+			// diagnostics, but are not a coverage gate.
 			if result.EnvironmentLimited {
 				continue
 			}
@@ -354,6 +352,11 @@ func buildTCPQualitySnapshot(ctx context.Context, task models.TCPQualityTask, ho
 		}
 	}
 	return snapshot, nil
+}
+
+func tcpQualityTargetKeySelected(labelKeys map[string]struct{}, targetKey string) bool {
+	_, selected := labelKeys[targetKey]
+	return selected
 }
 
 func tcpQualityResultUsable(result v2.TCPQualityTargetResult) bool {

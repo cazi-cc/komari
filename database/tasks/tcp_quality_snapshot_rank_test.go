@@ -197,6 +197,17 @@ func TestTCPQualityPayloadCommonIncidentIsExcludedAndKeepsResilientNode(t *testi
 	}
 }
 
+func TestTCPQualityTargetSelectionSurvivesEndpointRotation(t *testing.T) {
+	labelKeys := map[string]struct{}{"fj-cm-v6": {}}
+
+	if !tcpQualityTargetKeySelected(labelKeys, "fj-cm-v6") {
+		t.Fatal("stable target key should remain selected after catalog endpoint rotation")
+	}
+	if tcpQualityTargetKeySelected(labelKeys, "fj-cm-v4") {
+		t.Fatal("a different target key must not be selected")
+	}
+}
+
 func testRankPointer(value int) *int {
 	return &value
 }

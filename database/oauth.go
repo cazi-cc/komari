@@ -5,15 +5,6 @@ import (
 	"github.com/komari-monitor/komari/database/models"
 )
 
-func GetAllOidcConfigs() []models.OidcProvider {
-	db := dbcore.GetDBInstance()
-	var result []models.OidcProvider
-	if err := db.Find(&result).Error; err != nil {
-		return nil
-	}
-	return result
-}
-
 func GetOidcConfigByName(name string) (*models.OidcProvider, error) {
 	db := dbcore.GetDBInstance()
 	var config models.OidcProvider
@@ -29,9 +20,5 @@ func DeleteOidcConfigByName(name string) error {
 }
 
 func SaveOidcConfig(config *models.OidcProvider) error {
-	db := dbcore.GetDBInstance()
-	if err := db.Save(config).Error; err != nil {
-		return err
-	}
-	return nil
+	return dbcore.GetDBInstance().Save(config).Error
 }

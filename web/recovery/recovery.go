@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/komari-monitor/komari/database/metricstore"
 	appconfig "github.com/komari-monitor/komari/internal/config"
+	"github.com/komari-monitor/komari/internal/metricstore"
 	"github.com/komari-monitor/komari/web/api"
 	publicapi "github.com/komari-monitor/komari/web/api/public"
 	jsonrpc "github.com/komari-monitor/komari/web/rpc/jsonrpc"

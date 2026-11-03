@@ -15,15 +15,16 @@ import (
 	"github.com/komari-monitor/komari/database"
 	"github.com/komari-monitor/komari/database/accounts"
 	"github.com/komari-monitor/komari/database/auditlog"
-	"github.com/komari-monitor/komari/database/metricstore"
-	d_notification "github.com/komari-monitor/komari/database/notification"
+	"github.com/komari-monitor/komari/database/notification"
 	"github.com/komari-monitor/komari/database/tasks"
 	"github.com/komari-monitor/komari/internal/config"
+	"github.com/komari-monitor/komari/internal/lifecycle"
+	"github.com/komari-monitor/komari/internal/metricstore"
+	"github.com/komari-monitor/komari/internal/plugin"
 	"github.com/komari-monitor/komari/internal/scheduler"
 	"github.com/komari-monitor/komari/utils"
 	"github.com/komari-monitor/komari/utils/geoip"
 	logger "github.com/komari-monitor/komari/utils/log"
-	"github.com/komari-monitor/komari/utils/messageSender"
 	"github.com/komari-monitor/komari/utils/notifier"
 	"github.com/komari-monitor/komari/utils/visitorsecurity"
 	"github.com/komari-monitor/komari/web/api"
@@ -33,8 +34,23 @@ import (
 	"github.com/komari-monitor/komari/web/security"
 )
 
+// ErrRestartRequested is returned after a clean shutdown when a configuration
+// change requires the next startup to enter a restricted guide.
+var ErrRestartRequested = errors.New("server restart requested")
+
+const (
+	// Give in-flight HTTP requests time to finish before the listener closes.
+	httpShutdownTimeout = 10 * time.Second
+	// Keep an independent budget for report flushing and store teardown. Reusing
+	// the HTTP deadline here can skip queued metric writes after a slow request.
+	resourceCleanupTimeout = 30 * time.Second
+)
+
 // StartBackground starts scheduled work after all stores are ready.
 func (a *App) StartBackground() error {
+	if err := notification.ReloadLoadNotificationSchedule(); err != nil {
+		return fmt.Errorf("restore custom load-alert schedules: %w", err)
+	}
 	registerScheduledWork()
 	a.addCleanup("scheduler", func(context.Context) error {
 		scheduler.StopAll()
@@ -63,11 +79,6 @@ func (a *App) registerReloadHandlers(cors *security.CorsController) {
 	a.reload.Register("geoip-provider", func(event config.ConfigEvent) {
 		if event.IsChanged(config.GeoIpProviderKey) {
 			go geoip.InitGeoIp()
-		}
-	})
-	a.reload.Register("message-sender", func(event config.ConfigEvent) {
-		if event.IsChanged(config.NotificationMethodKey) {
-			go messageSender.Initialize()
 		}
 	})
 	a.reload.Register("visitor-security", func(event config.ConfigEvent) {
@@ -101,6 +112,15 @@ func (a *App) BuildRouter() error {
 		c.Redirect(http.StatusTemporaryRedirect, "/")
 	})
 	router.Register(r)
+
+	// Plugins are loaded after the router exists so server.route can bind
+	// routes; a failed plugin only disables itself and is logged.
+	plugin.Init(r)
+	if err := plugin.LoadAll(); err != nil {
+		logger.ErrorArgs("server", "Failed to load some plugins:", err)
+	}
+	a.addCleanup("plugins", func(context.Context) error { return plugin.CloseAll() })
+
 	a.registerReloadHandlers(cors)
 	a.reload.Start()
 	a.engine = r
@@ -123,7 +143,10 @@ func trustedReverseProxies() []string {
 
 // Run starts the normal HTTP server and blocks until shutdown or fatal error.
 func (a *App) Run() error {
-	a.server = &http.Server{Addr: a.listenAddr, Handler: a.engine}
+	// The HTML injector runs outside the hook chain so it sees the final
+	// response: plugin hooks can still rewrite the body, then the registered
+	// head/body fragments are embedded into every text/html page.
+	a.server = &http.Server{Addr: a.listenAddr, Handler: plugin.HTMLInjectHandler(plugin.WrapHandler(a.engine))}
 	serverErr := make(chan error, 1)
 	logger.Infof("server", "Starting server on %s ...", a.listenAddr)
 	go func() {
@@ -139,6 +162,12 @@ func (a *App) Run() error {
 	case err := <-serverErr:
 		a.onFatal(err)
 		return fmt.Errorf("listen: %w", err)
+	case reason := <-lifecycle.RestartRequests():
+		logger.Infof("server", "Restarting service for %s", reason)
+		if err := a.Shutdown(); err != nil {
+			logger.Errorf("server", "Cleanup before restart failed: %v", err)
+		}
+		return fmt.Errorf("%w: %s", ErrRestartRequested, reason)
 	case <-quit:
 		return a.Shutdown()
 	}
@@ -149,33 +178,40 @@ func (a *App) Shutdown() error {
 	if a.dbReady {
 		auditlog.Log("", "", "server is shutting down", "info")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	httpCtx, cancelHTTP := context.WithTimeout(context.Background(), httpShutdownTimeout)
+	defer cancelHTTP()
 	if a.server != nil {
-		if err := a.server.Shutdown(ctx); err != nil {
+		if err := a.server.Shutdown(httpCtx); err != nil {
 			logger.Infof("server", "HTTP server forced to shutdown: %v", err)
 		}
 	}
-	a.runCleanups(ctx)
-	return nil
+
+	cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), resourceCleanupTimeout)
+	defer cancelCleanup()
+	return a.runCleanups(cleanupCtx)
 }
 
 func (a *App) onFatal(err error) {
 	if a.dbReady {
 		auditlog.Log("", "", "server encountered a fatal error: "+err.Error(), "error")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), resourceCleanupTimeout)
 	defer cancel()
-	a.runCleanups(ctx)
+	if cleanupErr := a.runCleanups(ctx); cleanupErr != nil {
+		logger.Errorf("server", "Cleanup after fatal server error failed: %v", cleanupErr)
+	}
 }
 
-func (a *App) runCleanups(ctx context.Context) {
+func (a *App) runCleanups(ctx context.Context) error {
+	var cleanupErrors []error
 	for i := len(a.cleanups) - 1; i >= 0; i-- {
 		cleanup := a.cleanups[i]
 		if err := cleanup.fn(ctx); err != nil {
 			logger.Errorf("server", "cleanup %q failed: %v", cleanup.name, err)
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup %q: %w", cleanup.name, err))
 		}
 	}
+	return errors.Join(cleanupErrors...)
 }
 
 func registerScheduledWork() {
@@ -184,9 +220,6 @@ func registerScheduledWork() {
 	}
 	if err := tasks.ReloadProbeSchedules(); err != nil {
 		logger.ErrorArgs("server", "Failed to reload probe schedules:", err)
-	}
-	if err := d_notification.ReloadLoadNotificationSchedule(); err != nil {
-		logger.ErrorArgs("server", "Failed to reload load notification schedule:", err)
 	}
 	if err := scheduler.AddFunc("records:cleanup", "@every 30m", cleanupScheduledData); err != nil {
 		logger.ErrorArgs("server", "Failed to add cleanup scheduled task:", err)
@@ -203,10 +236,13 @@ func registerScheduledWork() {
 	if err := scheduler.AddContextFunc("unlock-quality:snapshots", "@every 1m", true, refreshUnlockQualitySnapshots); err != nil {
 		logger.ErrorArgs("server", "Failed to add unlock quality snapshot refresh:", err)
 	}
+	if err := scheduler.AddContextFunc("metrics:retention", "@every 1h", true, cleanupMetricStore); err != nil {
+		logger.ErrorArgs("server", "Failed to add metric retention scheduled task:", err)
+	}
 	if err := scheduler.AddFunc("notifier:traffic", "@every 1m", notifier.CheckTraffic); err != nil {
 		logger.ErrorArgs("server", "Failed to add traffic notification task:", err)
 	}
-	if err := scheduler.AddFunc("notifier:expire", "0 0 9 * * *", notifier.CheckExpireScheduledWork); err != nil {
+	if err := scheduler.AddFunc("notifier:expire", "0 0 9 * * *", notifier.CheckExpire); err != nil {
 		logger.ErrorArgs("server", "Failed to add expire notification task:", err)
 	}
 	notifier.InitTrafficReportSchedule()
@@ -278,5 +314,21 @@ func compactMetricStore(ctx context.Context) {
 	}
 	if written > 0 {
 		logger.Infof("server", "Metric store compacted %d rollup buckets", written)
+	}
+}
+
+func cleanupMetricStore(ctx context.Context) {
+	cleanupCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+	defer cancel()
+	deleted, err := metricstore.CleanupExpired(cleanupCtx, time.Now().UTC())
+	if errors.Is(err, metricstore.ErrCompactInProgress) {
+		return
+	}
+	if err != nil {
+		logger.Errorf("server", "Failed to clean expired metric data after deleting %d rows: %v", deleted, err)
+		return
+	}
+	if deleted > 0 {
+		logger.Infof("server", "Metric retention cleanup deleted %d rows", deleted)
 	}
 }

@@ -1,14 +1,16 @@
 package jsonrpc
 
 import (
+	"context"
 	"encoding/json"
 	"math"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/komari-monitor/komari/database/metricstore"
 	"github.com/komari-monitor/komari/database/models"
+	"github.com/komari-monitor/komari/internal/metricstore"
 	"github.com/komari-monitor/komari/pkg/metric"
 	"github.com/komari-monitor/komari/pkg/rpc"
 )
@@ -38,6 +40,24 @@ func TestMetricQueryParamsRequireRFC3339Time(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMetricQueryParamsIgnoreRemovedDownsampleFlags(t *testing.T) {
+	req := &rpc.JsonRpcRequest{Params: map[string]any{
+		"metric_key":                  "cpu.usage",
+		"downsample":                  false,
+		"server_downsample":           false,
+		"downsample_by_metric":        map[string]bool{"cpu.usage": false},
+		"server_downsample_by_metric": map[string]bool{"cpu.usage": false},
+		"max_points":                  123,
+	}}
+	var params publicMetricQueryParams
+	if err := req.BindParams(&params); err != nil {
+		t.Fatalf("removed downsample flags should be ignored: %v", err)
+	}
+	if params.MetricKey != "cpu.usage" || params.MaxPoints != 123 {
+		t.Fatalf("remaining query params were not bound: %#v", params)
 	}
 }
 
@@ -146,13 +166,12 @@ func TestAdaptiveFillPublicMetricSeriesAddsCompactGapsAndBounds(t *testing.T) {
 	if got.IntervalSeconds != 60 {
 		t.Fatalf("expected observed 60s interval, got %v", got.IntervalSeconds)
 	}
-	if len(got.Points) != 7 {
-		t.Fatalf("expected four values, one gap and two bounds, got %#v", got.Points)
+	if len(got.Points) != 6 {
+		t.Fatalf("expected four values, one gap and one leading bound, got %#v", got.Points)
 	}
 	wantNullTimes := map[time.Time]bool{
 		start:                     true,
 		base.Add(3 * time.Minute): true,
-		end:                       true,
 	}
 	for _, point := range got.Points {
 		if point.Value != nil {
@@ -171,26 +190,20 @@ func TestAdaptiveFillPublicMetricSeriesAddsCompactGapsAndBounds(t *testing.T) {
 	}
 }
 
-func TestPublicPingMetricFillEmptyMapsMinusOneToNull(t *testing.T) {
-	for _, metricName := range []string{metricstore.MetricPingLatency, metricstore.MetricPingLoss} {
-		if value := publicRawMetricValue(metricName, -1, true); value != nil {
-			t.Fatalf("raw %s -1 should become null when fill_empty is enabled, got %v", metricName, *value)
-		}
+func TestAdaptiveFillPublicMetricSeriesNeverEndsWithNullAfterData(t *testing.T) {
+	base := time.Date(2026, 6, 18, 0, 0, 0, 0, time.UTC)
+	series := publicMetricSeries{
+		MetricKey:       "cpu.usage",
+		EntityID:        "node-a",
+		IntervalSeconds: 60,
+		Points: []publicMetricPoint{
+			{Time: base, Value: publicMetricValue(10)},
+			{Time: base.Add(time.Minute), Value: publicMetricValue(20)},
+		},
 	}
-	if value := publicRawMetricValue(metricstore.MetricPingLatency, -1, true); value != nil {
-		t.Fatalf("downsampled ping -1 should become null when fill_empty is enabled, got %v", *value)
-	}
-}
-
-func TestPublicPingMetricMinusOneIsPreservedWithoutFillEmpty(t *testing.T) {
-	value := publicRawMetricValue(metricstore.MetricPingLatency, -1, false)
-	if value == nil || *value != -1 {
-		t.Fatalf("raw ping -1 should be preserved when fill_empty is disabled, got %v", value)
-	}
-
-	nonPing := publicRawMetricValue("temperature", -1, true)
-	if nonPing == nil || *nonPing != -1 {
-		t.Fatalf("negative values from non-ping metrics must be preserved, got %v", nonPing)
+	got := adaptiveFillPublicMetricSeries(series, base, base.Add(time.Hour))
+	if len(got.Points) == 0 || got.Points[len(got.Points)-1].Value == nil {
+		t.Fatalf("series ended with an empty chart bucket: %#v", got.Points)
 	}
 }
 
@@ -273,6 +286,207 @@ func TestPublicPingMetricStatsIncludesZeroVolatility(t *testing.T) {
 	}
 }
 
+func TestMetricDownsampleIntervalCeilsToStandardInterval(t *testing.T) {
+	got := metricstore.DownsampleInterval(30*24*time.Hour, 500, true)
+	if got != 2*time.Hour {
+		t.Fatalf("30d/500 should ceil to 2h, got %s", got)
+	}
+
+	got = metricstore.DownsampleInterval(time.Hour, 500, true)
+	if got != 10*time.Second {
+		t.Fatalf("1h/500 should ceil to 10s, got %s", got)
+	}
+
+	got = metricstore.DownsampleInterval(1000*24*time.Hour, 10, true)
+	if got != 100*24*time.Hour {
+		t.Fatalf("ranges beyond the standard table should ceil to whole days, got %s", got)
+	}
+}
+
+func TestLoadPublicMetricPointsReturnsAllRecentRawSamples(t *testing.T) {
+	ctx := context.Background()
+	store, err := metric.Open(ctx, metric.SQLite(":memory:",
+		metric.WithMaxOpenConns(1),
+		metric.WithRollupPolicy(metric.RollupPolicy{
+			RawRetention: metricstore.DefaultRollupRawRetention,
+			Tiers: []metric.RollupTier{
+				{Interval: time.Minute, Retention: 10 * time.Hour},
+			},
+			Compression: 30,
+		}),
+	))
+	if err != nil {
+		t.Fatalf("open metric store: %v", err)
+	}
+	defer store.Close()
+
+	const metricName = "query.raw"
+	if err := store.CreateMetric(ctx, metric.Definition{
+		Name:          metricName,
+		Type:          metric.TypeGauge,
+		RetentionDays: 1,
+	}); err != nil {
+		t.Fatalf("create metric: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	input := []metric.Point{
+		{MetricName: metricName, EntityID: "node-a", Timestamp: now.Add(-9 * time.Minute), Value: 1, Tags: map[string]string{"core": "0"}, Labels: map[string]string{"source": "oldest"}},
+		{MetricName: metricName, EntityID: "node-a", Timestamp: now.Add(-5 * time.Minute), Value: 2, Tags: map[string]string{"core": "0"}},
+		{MetricName: metricName, EntityID: "node-a", Timestamp: now.Add(-90 * time.Second), Value: 3, Tags: map[string]string{"core": "0"}},
+		{MetricName: metricName, EntityID: "node-a", Timestamp: now.Add(-10 * time.Second), Value: 4, Tags: map[string]string{"core": "0"}},
+	}
+	if err := store.WriteBatch(ctx, input); err != nil {
+		t.Fatalf("write raw points: %v", err)
+	}
+
+	queryEnd := now.Add(-3 * time.Second)
+	got, err := loadPublicMetricPoints(ctx, store, metric.Query{
+		MetricName: metricName,
+		EntityID:   "node-a",
+		Start:      queryEnd.Add(-10 * time.Minute),
+		End:        queryEnd,
+		Order:      metric.OrderAsc,
+	}, metric.AggAvg, 1, false, now)
+	if err != nil {
+		t.Fatalf("load public metric points: %v", err)
+	}
+	if got.downsampled || got.interval != 0 {
+		t.Fatalf("recent raw query was marked downsampled: %#v", got)
+	}
+	if len(got.points) != len(input) {
+		t.Fatalf("recent query returned %d points, want all %d: %#v", len(got.points), len(input), got.points)
+	}
+	for i, point := range got.points {
+		if !point.Time.Equal(input[i].Timestamp) || point.Value == nil || *point.Value != input[i].Value || point.Count != 1 {
+			t.Fatalf("point %d = %#v, want %#v", i, point, input[i])
+		}
+	}
+	if got.points[0].Labels["source"] != "oldest" {
+		t.Fatalf("compressed raw point lost labels: %#v", got.points[0])
+	}
+}
+
+func TestPublicMetricUsesRawWindowOnlyForCurrentlyRetainedRange(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	if !publicMetricUsesRawWindow(now.Add(-10*time.Minute), now, now) {
+		t.Fatal("exact ten-minute current range should use raw samples")
+	}
+	delayedEnd := now.Add(-3 * time.Second)
+	if !publicMetricUsesRawWindow(delayedEnd.Add(-10*time.Minute), delayedEnd, now) {
+		t.Fatal("client-side ten-minute range should tolerate transit delay while it overlaps raw retention")
+	}
+	cutoff := now.Add(-10 * time.Minute)
+	if publicMetricUsesRawWindow(cutoff.Add(-10*time.Minute), cutoff, now) {
+		t.Fatal("range ending exactly at the raw cutoff should use rollups")
+	}
+	historicalEnd := cutoff.Add(-time.Millisecond)
+	if publicMetricUsesRawWindow(historicalEnd.Add(-10*time.Minute), historicalEnd, now) {
+		t.Fatal("fully historical range should use rollups")
+	}
+	if publicMetricUsesRawWindow(now.Add(-10*time.Minute-time.Millisecond), now, now) {
+		t.Fatal("range longer than ten minutes should use rollups")
+	}
+}
+
+func TestLoadPublicMetricPointsReturnsOnlyRawAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	dsn := filepath.Join(t.TempDir(), "metrics.db")
+	policy := metric.RollupPolicy{
+		RawRetention: metricstore.DefaultRollupRawRetention,
+		Tiers: []metric.RollupTier{
+			{Interval: time.Minute, Retention: 10 * time.Hour},
+		},
+		Compression: 30,
+	}
+	open := func() *metric.Store {
+		store, err := metric.Open(ctx, metric.SQLite(dsn,
+			metric.WithMaxOpenConns(1),
+			metric.WithRollupPolicy(policy),
+		))
+		if err != nil {
+			t.Fatalf("open metric store: %v", err)
+		}
+		return store
+	}
+
+	const metricName = "query.restart"
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	store := open()
+	if err := store.CreateMetric(ctx, metric.Definition{Name: metricName, Type: metric.TypeGauge, RetentionDays: 1}); err != nil {
+		t.Fatalf("create metric: %v", err)
+	}
+	beforeRestart := []metric.Point{
+		{MetricName: metricName, EntityID: "node-a", Timestamp: now.Add(-8 * time.Minute), Value: 1, Tags: map[string]string{"core": "0"}},
+		{MetricName: metricName, EntityID: "node-a", Timestamp: now.Add(-90 * time.Second), Value: 2, Tags: map[string]string{"core": "0"}},
+	}
+	if err := store.WriteBatch(ctx, beforeRestart); err != nil {
+		t.Fatalf("write pre-restart points: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close pre-restart store: %v", err)
+	}
+
+	store = open()
+	defer store.Close()
+	afterRestart := metric.Point{
+		MetricName: metricName,
+		EntityID:   "node-a",
+		Timestamp:  now.Add(-5 * time.Second),
+		Value:      3,
+		Tags:       map[string]string{"core": "0"},
+		Labels:     map[string]string{"source": "raw"},
+	}
+	if err := store.Write(ctx, afterRestart); err != nil {
+		t.Fatalf("write post-restart point: %v", err)
+	}
+
+	got, err := loadPublicMetricPoints(ctx, store, metric.Query{
+		MetricName: metricName,
+		EntityID:   "node-a",
+		Start:      now.Add(-10 * time.Minute),
+		End:        now,
+		Order:      metric.OrderAsc,
+	}, metric.AggAvg, 500, false, now)
+	if err != nil {
+		t.Fatalf("load mixed restart window: %v", err)
+	}
+	if got.downsampled || got.interval != 0 {
+		t.Fatalf("raw query metadata = %#v", got)
+	}
+	if len(got.points) != 1 {
+		t.Fatalf("restart window returned %d points, want one raw point: %#v", len(got.points), got.points)
+	}
+	if got.points[0].Value == nil || *got.points[0].Value != 3 {
+		t.Fatalf("raw point = %#v, want value 3", got.points[0])
+	}
+	if got.points[0].Count != 1 || got.points[0].Labels["source"] != "raw" {
+		t.Fatalf("post-restart exact point changed: %#v", got.points[0])
+	}
+}
+
+func TestPublicPingMetricFillEmptyMapsMinusOneToNull(t *testing.T) {
+	for _, metricName := range []string{metricstore.MetricPingLatency, metricstore.MetricPingLoss} {
+		if value := publicRawMetricValue(metricName, -1, true); value != nil {
+			t.Fatalf("raw %s -1 should become null when fill_empty is enabled, got %v", metricName, *value)
+		}
+	}
+	if value := publicRawMetricValue(metricstore.MetricPingLatency, -1, true); value != nil {
+		t.Fatalf("downsampled ping -1 should become null when fill_empty is enabled, got %v", *value)
+	}
+}
+
+func TestPublicPingMetricMinusOneIsPreservedWithoutFillEmpty(t *testing.T) {
+	value := publicRawMetricValue(metricstore.MetricPingLatency, -1, false)
+	if value == nil || *value != -1 {
+		t.Fatalf("raw ping -1 should be preserved when fill_empty is disabled, got %v", value)
+	}
+
+	nonPing := publicRawMetricValue("temperature", -1, true)
+	if nonPing == nil || *nonPing != -1 {
+		t.Fatalf("negative values from non-ping metrics must be preserved, got %v", nonPing)
+	}
+}
+
 func TestPublicPingStatsFromSnapshotsUsesSuccessfulLatencyAndDedicatedLoss(t *testing.T) {
 	base := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 	taskMap := map[string]models.PingTask{
@@ -331,23 +545,6 @@ func TestPublicPingStatsFromSnapshotsFallsBackToCompleteFailureRatio(t *testing.
 	}
 	if got.Avg == nil || *got.Avg != 40 {
 		t.Fatalf("legacy latency fallback mismatch: %#v", got)
-	}
-}
-
-func TestMetricDownsampleIntervalCeilsToStandardInterval(t *testing.T) {
-	got := metricDownsampleInterval(30*24*time.Hour, 500)
-	if got != 2*time.Hour {
-		t.Fatalf("30d/500 should ceil to 2h, got %s", got)
-	}
-
-	got = metricDownsampleInterval(time.Hour, 500)
-	if got != 10*time.Second {
-		t.Fatalf("1h/500 should ceil to 10s, got %s", got)
-	}
-
-	got = metricDownsampleInterval(1000*24*time.Hour, 10)
-	if got != 100*24*time.Hour {
-		t.Fatalf("ranges beyond the standard table should ceil to whole days, got %s", got)
 	}
 }
 

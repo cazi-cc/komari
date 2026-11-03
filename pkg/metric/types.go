@@ -194,6 +194,10 @@ func (d Definition) Validate() error {
 //
 // Point 表示某个实体在某一时刻的一条指标采样。
 type Point struct {
+	// SeriesIdentity is opt-in query metadata, never part of public JSON.
+	// Clear or rebuild it after changing EntityID or Tags (including map contents);
+	// grouping trusts the immutable snapshot. Compare Key(), not pointer addresses.
+	SeriesIdentity *SeriesIdentity `json:"-"`
 	// MetricName names the metric this sample belongs to.
 	//
 	// MetricName 表示该采样所属的指标名称。
@@ -253,9 +257,9 @@ func (p Point) normalized() Point {
 	return p
 }
 
-// Query loads raw metric points matching a query.
+// Query loads exact raw samples from the retained raw window.
 //
-// Query 描述原始点查询条件，包括指标、实体、时间范围、标签和分页。
+// Query 描述指标值查询条件，包括指标、实体、时间范围、标签和分页。
 type Query struct {
 	// MetricName restricts the query to one metric.
 	//
@@ -277,18 +281,74 @@ type Query struct {
 	//
 	// Tags 按标签键值精确匹配过滤采样点。
 	Tags map[string]string `json:"tags,omitempty"`
-	// Limit limits the number of raw points returned.
+	// Limit limits the number of values returned.
 	//
-	// Limit 限制返回的原始点数量。
+	// Limit 限制返回的值数量。
 	Limit int `json:"limit,omitempty"`
-	// Offset skips this many raw points before returning results.
+	// Offset skips this many values before returning results.
 	//
-	// Offset 在返回结果前跳过指定数量的原始点。
+	// Offset 在返回结果前跳过指定数量的值。
 	Offset int `json:"offset,omitempty"`
 	// Order controls chronological result ordering.
 	//
 	// Order 控制结果的时间顺序。
 	Order Order `json:"order,omitempty"`
+}
+
+// BatchQuery loads exact raw samples for multiple metrics and entities from one
+// shared time window.
+type BatchQuery struct {
+	// IncludeSeriesIdentity snapshots output entity/Tags once per series.
+	// Default false keeps existing Go-value equality and JSON unchanged.
+	IncludeSeriesIdentity bool              `json:"-"`
+	MetricNames           []string          `json:"metric_names"`
+	EntityIDs             []string          `json:"entity_ids,omitempty"`
+	Start                 time.Time         `json:"start"`
+	End                   time.Time         `json:"end"`
+	Tags                  map[string]string `json:"tags,omitempty"`
+	Order                 Order             `json:"order,omitempty"`
+	// OmitTags skips output tag decoding, but does not change tag filters or ordering.
+	OmitTags bool `json:"omit_tags,omitempty"`
+	// OmitLabels skips decoding and returning sample labels.
+	OmitLabels bool `json:"omit_labels,omitempty"`
+}
+
+// BatchSeriesSpec describes the rollup output requested for one metric.
+type BatchSeriesSpec struct {
+	MetricName     string
+	Aggregations   []Aggregation
+	Interval       time.Duration
+	PreserveSeries bool
+	// GroupByEntity keeps entities separate while merging their tag variants.
+	// PreserveSeries takes precedence and additionally preserves tags. Rate
+	// output retains its existing per-series counter semantics.
+	GroupByEntity bool
+}
+
+// BatchSeriesQuery combines per-metric rollup specifications that share the
+// same time, entity, tag, and ordering filters.
+type BatchSeriesQuery struct {
+	// IncludeSeriesIdentity snapshots output entity/Tags once per series.
+	// Default false keeps existing Go-value equality and JSON unchanged.
+	IncludeSeriesIdentity bool `json:"-"`
+	Specs                 []BatchSeriesSpec
+	EntityIDs             []string
+	Start                 time.Time
+	End                   time.Time
+	Tags                  map[string]string
+	Order                 Order
+	// OmitTags skips output tags without changing filters or series grouping.
+	OmitTags bool
+	// CompactDefinitions returns only Name, Type, and RetentionDays, avoiding
+	// descriptive metadata loading and decoding. The default returns full definitions.
+	CompactDefinitions bool
+}
+
+// BatchSeriesResult contains definitions and aggregate values keyed by metric
+// and aggregation.
+type BatchSeriesResult struct {
+	Definitions map[string]Definition
+	Values      map[string]map[Aggregation][]AggregatePoint
 }
 
 // Validate checks whether the value is well formed.
@@ -319,6 +379,76 @@ func (q Query) Validate() error {
 //
 // normalized 将查询时间规范化为 UTC，并设置默认排序。
 func (q Query) normalized() Query {
+	q.Start = q.Start.UTC()
+	q.End = q.End.UTC()
+	if q.Order == "" {
+		q.Order = OrderAsc
+	}
+	return q
+}
+
+// Validate checks whether a batch raw query is well formed.
+func (q BatchQuery) Validate() error {
+	if len(q.MetricNames) == 0 {
+		return fmt.Errorf("%w: at least one metric name is required", ErrInvalidArgument)
+	}
+	for _, name := range q.MetricNames {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("%w: metric name is required", ErrInvalidArgument)
+		}
+	}
+	if q.Start.IsZero() || q.End.IsZero() {
+		return fmt.Errorf("%w: start and end time are required", ErrInvalidArgument)
+	}
+	if q.End.Before(q.Start) {
+		return fmt.Errorf("%w: end time cannot be before start time", ErrInvalidArgument)
+	}
+	switch q.Order {
+	case "", OrderAsc, OrderDesc:
+	default:
+		return fmt.Errorf("%w: unsupported order %q", ErrInvalidArgument, q.Order)
+	}
+	return nil
+}
+
+func (q BatchQuery) normalized() BatchQuery {
+	q.Start = q.Start.UTC()
+	q.End = q.End.UTC()
+	if q.Order == "" {
+		q.Order = OrderAsc
+	}
+	return q
+}
+
+// Validate checks whether a batch rollup query is well formed.
+func (q BatchSeriesQuery) Validate() error {
+	if len(q.Specs) == 0 {
+		return fmt.Errorf("%w: at least one series specification is required", ErrInvalidArgument)
+	}
+	seen := make(map[string]struct{}, len(q.Specs))
+	for _, spec := range q.Specs {
+		if _, ok := seen[spec.MetricName]; ok {
+			return fmt.Errorf("%w: duplicate series specification for metric %q", ErrInvalidArgument, spec.MetricName)
+		}
+		seen[spec.MetricName] = struct{}{}
+		if len(spec.Aggregations) == 0 {
+			return fmt.Errorf("%w: at least one aggregation is required for metric %q", ErrInvalidArgument, spec.MetricName)
+		}
+		for _, aggregation := range spec.Aggregations {
+			if err := (AggregateQuery{
+				Query:          Query{MetricName: spec.MetricName, Start: q.Start, End: q.End, Tags: q.Tags, Order: q.Order},
+				Aggregation:    aggregation,
+				Interval:       spec.Interval,
+				PreserveSeries: spec.PreserveSeries,
+			}).Validate(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (q BatchSeriesQuery) normalized() BatchSeriesQuery {
 	q.Start = q.Start.UTC()
 	q.End = q.End.UTC()
 	if q.Order == "" {
@@ -397,6 +527,10 @@ func (q AggregateQuery) Validate() error {
 //
 // AggregatePoint 表示一个聚合桶的结果。
 type AggregatePoint struct {
+	// SeriesIdentity is opt-in query metadata, never part of public JSON.
+	// Clear or rebuild it after changing EntityID or Tags (including map contents);
+	// grouping trusts the immutable snapshot. Compare Key(), not pointer addresses.
+	SeriesIdentity *SeriesIdentity `json:"-"`
 	// MetricName is the metric represented by the bucket.
 	//
 	// MetricName 是该桶代表的指标名称。
@@ -425,7 +559,7 @@ type AggregatePoint struct {
 
 // Stats stores or computes summary statistics for a point series.
 //
-// Stats 表示一段原始点序列的统计摘要。
+// Stats 表示一段指标序列的统计摘要。
 type Stats struct {
 	// Count is the number of points in the series.
 	//

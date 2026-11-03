@@ -12,9 +12,10 @@ import (
 	"github.com/komari-monitor/komari/database/dbcore"
 	"github.com/komari-monitor/komari/database/models"
 	"github.com/komari-monitor/komari/database/tasks"
+	"github.com/komari-monitor/komari/internal/metricstore"
 	"github.com/komari-monitor/komari/pkg/rpc"
 	"github.com/komari-monitor/komari/pkg/trafficledger"
-	"github.com/komari-monitor/komari/protocol/v1"
+	v2 "github.com/komari-monitor/komari/protocol/v2"
 	"github.com/komari-monitor/komari/utils"
 	agent_runtime "github.com/komari-monitor/komari/web/agent"
 
@@ -59,7 +60,7 @@ func getPingStatsForNode(uuid string, pingTasks []models.PingTask) map[string]pi
 	}
 	end := time.Now().UTC()
 	start := end.Add(-1 * time.Hour)
-	recs, err := tasks.GetPingRecords(uuid, -1, start, end)
+	recs, err := metricstore.GetPingRecords(context.Background(), uuid, -1, start, end)
 	if err != nil || len(recs) == 0 {
 		empty := map[string]pingStat{}
 		pingStatsCache.Set(key, empty, cache.DefaultExpiration)
@@ -266,6 +267,13 @@ func redactGuestNode(node models.Client) models.Client {
 	return node
 }
 
+func gpuUsageFromReport(rep *v2.Report) float32 {
+	if rep == nil || rep.GPU == nil {
+		return 0
+	}
+	return float32(rep.GPU.AverageUsage)
+}
+
 func getPublicInfo(_ context.Context, _ *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
 	info, err := database.GetPublicInfo()
 	if err != nil {
@@ -282,7 +290,7 @@ func getNodesLatestStatus(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 	req.BindParams(&params)
 
 	meta := rpc.MetaFromContext(ctx)
-	latest := agent_runtime.GetLatestReport() // map[string]*v1.Report (copy)
+	latest := agent_runtime.GetLatestReport()
 	onlineUUIDs := agent_runtime.GetAllOnlineUUIDs()
 	onlineSet := make(map[string]bool, len(onlineUUIDs))
 	for _, uuid := range onlineUUIDs {
@@ -320,6 +328,9 @@ func getNodesLatestStatus(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 		Time            time.Time           `json:"time"`
 		Cpu             float32             `json:"cpu"`
 		Gpu             float32             `json:"gpu"`
+		GpuCount        int                 `json:"gpu_count,omitempty"`
+		GpuAverageUsage float64             `json:"gpu_average_usage,omitempty"`
+		GpuDetailedInfo []v2.GPUDeviceInfo  `json:"gpu_detailed_info,omitempty"`
 		Ram             int64               `json:"ram"`
 		RamTotal        int64               `json:"ram_total"`
 		Swap            int64               `json:"swap"`
@@ -349,7 +360,7 @@ func getNodesLatestStatus(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 	// 预取所有 ping 任务
 	pingTasks, _ := tasks.GetAllPingTasks()
 
-	appendOne := func(uuid string, rep *v1.Report) {
+	appendOne := func(uuid string, rep *v2.Report) {
 		if rep == nil {
 			return
 		}
@@ -359,7 +370,7 @@ func getNodesLatestStatus(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 			Client:          uuid,
 			Time:            rep.UpdatedAt,
 			Cpu:             float32(rep.CPU.Usage),
-			Gpu:             0,
+			Gpu:             gpuUsageFromReport(rep),
 			Ram:             rep.Ram.Used,
 			RamTotal:        rep.Ram.Total,
 			Swap:            rep.Swap.Used,
@@ -382,6 +393,11 @@ func getNodesLatestStatus(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 			Online:          onlineSet[uuid],
 			Uptime:          rep.Uptime,
 			Ping:            stats,
+		}
+		if rep.GPU != nil {
+			rl.GpuCount = rep.GPU.Count
+			rl.GpuAverageUsage = rep.GPU.AverageUsage
+			rl.GpuDetailedInfo = rep.GPU.DetailedInfo
 		}
 		respMap[uuid] = rl
 	}
@@ -538,7 +554,7 @@ func getNodeRecentStatus(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rp
 			Client:         params.UUID,
 			Time:           r.UpdatedAt,
 			Cpu:            float32(r.CPU.Usage),
-			Gpu:            0,
+			Gpu:            gpuUsageFromReport(&r),
 			Ram:            r.Ram.Used,
 			RamTotal:       r.Ram.Total,
 			Swap:           r.Swap.Used,

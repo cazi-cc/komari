@@ -8,6 +8,7 @@ import (
 
 	"github.com/komari-monitor/komari/database/clients"
 	"github.com/komari-monitor/komari/database/models"
+	messageevent "github.com/komari-monitor/komari/database/models/messageEvent"
 	"github.com/komari-monitor/komari/internal/config"
 	logger "github.com/komari-monitor/komari/utils/log"
 	"github.com/komari-monitor/komari/utils/messageSender"
@@ -38,13 +39,7 @@ func CheckTraffic() {
 
 	// 起始阈值：例如 80%，非5的倍数则从上取整到最近的5的倍数，例如 83->85
 	startThreshold := cfg
-	if startThreshold < 0 {
-		startThreshold = 0
-	}
-	baseStep := int(math.Ceil(startThreshold/5.0) * 5.0)
-	if baseStep > 100 {
-		baseStep = 100
-	}
+	baseStep := min(int(math.Ceil(startThreshold/5.0)*5.0), 100)
 
 	allClients, err := clients.GetAllClientBasicInfo()
 	if err != nil {
@@ -57,7 +52,7 @@ func CheckTraffic() {
 		}
 
 		r, ok := reports[c.UUID]
-		if !ok || r == nil {
+		if !ok {
 			continue
 		}
 
@@ -73,13 +68,7 @@ func CheckTraffic() {
 		}
 
 		// 当前所在阈值步进（5%的倍数）
-		curStep := int(math.Floor(pct/5.0) * 5.0)
-		if curStep < baseStep {
-			curStep = baseStep
-		}
-		// if curStep > 100 {
-		// 	curStep = 100
-		// }
+		curStep := max(int(math.Floor(pct/5.0)*5.0), baseStep)
 
 		key := "traffic:" + c.UUID
 		last, _ := trafficCache.Get(key)
@@ -95,8 +84,8 @@ func CheckTraffic() {
 
 			msg := fmt.Sprintf("used %d%% (%s / %s), type=%s", curStep, humanBytes(used), humanBytes(c.TrafficLimit), strings.ToLower(c.TrafficLimitType))
 			// 发送通知（内部会检查 NotificationEnabled）
-			_ = messageSender.SendEvent(models.EventMessage{
-				Event:   "Traffic",
+			_ = messageSender.SendNotification(models.EventMessage{
+				Event:   messageevent.Traffic,
 				Clients: []models.Client{c},
 				Time:    time.Now().UTC(),
 				Emoji:   "⚠️",
@@ -115,17 +104,9 @@ func computeUsedByType(t string, up, down int64) int64 {
 	case "sum":
 		return up + down
 	case "min":
-		if up < down {
-			return up
-		}
-		return down
-	case "max":
-		fallthrough
-	default:
-		if up > down {
-			return up
-		}
-		return down
+		return min(up, down)
+	default: // "max"
+		return max(up, down)
 	}
 }
 
@@ -139,10 +120,5 @@ func humanBytes(b int64) string {
 		div *= unit
 		exp++
 	}
-	// KMGTPE
-	prefixes := []string{"K", "M", "G", "T", "P", "E"}
-	if exp >= len(prefixes) {
-		exp = len(prefixes) - 1
-	}
-	return fmt.Sprintf("%.2f %sB", float64(b)/float64(div), prefixes[exp])
+	return fmt.Sprintf("%.2f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }

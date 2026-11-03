@@ -12,8 +12,10 @@ import (
 	"github.com/komari-monitor/komari/database/dbcore"
 	"github.com/komari-monitor/komari/database/models"
 	"github.com/komari-monitor/komari/database/tasks"
+	"github.com/komari-monitor/komari/internal/metricstore"
 	"github.com/komari-monitor/komari/pkg/rpc"
-	"github.com/komari-monitor/komari/protocol/v1"
+	"github.com/komari-monitor/komari/pkg/trafficledger"
+	v2 "github.com/komari-monitor/komari/protocol/v2"
 	"github.com/komari-monitor/komari/utils"
 	agent_runtime "github.com/komari-monitor/komari/web/agent"
 
@@ -58,7 +60,7 @@ func getPingStatsForNode(uuid string, pingTasks []models.PingTask) map[string]pi
 	}
 	end := time.Now().UTC()
 	start := end.Add(-1 * time.Hour)
-	recs, err := tasks.GetPingRecords(uuid, -1, start, end)
+	recs, err := metricstore.GetPingRecords(context.Background(), uuid, -1, start, end)
 	if err != nil || len(recs) == 0 {
 		empty := map[string]pingStat{}
 		pingStatsCache.Set(key, empty, cache.DefaultExpiration)
@@ -265,6 +267,13 @@ func redactGuestNode(node models.Client) models.Client {
 	return node
 }
 
+func gpuUsageFromReport(rep *v2.Report) float32 {
+	if rep == nil || rep.GPU == nil {
+		return 0
+	}
+	return float32(rep.GPU.AverageUsage)
+}
+
 func getPublicInfo(_ context.Context, _ *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
 	info, err := database.GetPublicInfo()
 	if err != nil {
@@ -281,7 +290,7 @@ func getNodesLatestStatus(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 	req.BindParams(&params)
 
 	meta := rpc.MetaFromContext(ctx)
-	latest := agent_runtime.GetLatestReport() // map[string]*v1.Report (copy)
+	latest := agent_runtime.GetLatestReport()
 	onlineUUIDs := agent_runtime.GetAllOnlineUUIDs()
 	onlineSet := make(map[string]bool, len(onlineUUIDs))
 	for _, uuid := range onlineUUIDs {
@@ -315,30 +324,35 @@ func getNodesLatestStatus(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 	}
 
 	type recordLike struct {
-		Client         string              `json:"client"`
-		Time           time.Time           `json:"time"`
-		Cpu            float32             `json:"cpu"`
-		Gpu            float32             `json:"gpu"`
-		Ram            int64               `json:"ram"`
-		RamTotal       int64               `json:"ram_total"`
-		Swap           int64               `json:"swap"`
-		SwapTotal      int64               `json:"swap_total"`
-		Load           float32             `json:"load"`
-		Load5          float32             `json:"load5"`
-		Load15         float32             `json:"load15"`
-		Temp           float32             `json:"temp"`
-		Disk           int64               `json:"disk"`
-		DiskTotal      int64               `json:"disk_total"`
-		NetIn          int64               `json:"net_in"`
-		NetOut         int64               `json:"net_out"`
-		NetTotalUp     int64               `json:"net_total_up"`
-		NetTotalDown   int64               `json:"net_total_down"`
-		Process        int                 `json:"process"`
-		Connections    int                 `json:"connections"`
-		ConnectionsUdp int                 `json:"connections_udp"`
-		Online         bool                `json:"online"`
-		Uptime         int64               `json:"uptime"`
-		Ping           map[string]pingStat `json:"ping"`
+		Client          string              `json:"client"`
+		Time            time.Time           `json:"time"`
+		Cpu             float32             `json:"cpu"`
+		Gpu             float32             `json:"gpu"`
+		GpuCount        int                 `json:"gpu_count,omitempty"`
+		GpuAverageUsage float64             `json:"gpu_average_usage,omitempty"`
+		GpuDetailedInfo []v2.GPUDeviceInfo  `json:"gpu_detailed_info,omitempty"`
+		Ram             int64               `json:"ram"`
+		RamTotal        int64               `json:"ram_total"`
+		Swap            int64               `json:"swap"`
+		SwapTotal       int64               `json:"swap_total"`
+		Load            float32             `json:"load"`
+		Load5           float32             `json:"load5"`
+		Load15          float32             `json:"load15"`
+		Temp            float32             `json:"temp"`
+		Disk            int64               `json:"disk"`
+		DiskTotal       int64               `json:"disk_total"`
+		NetIn           int64               `json:"net_in"`
+		NetOut          int64               `json:"net_out"`
+		NetTotalUp      int64               `json:"net_total_up"`
+		NetTotalDown    int64               `json:"net_total_down"`
+		NetLifetimeUp   int64               `json:"net_lifetime_up"`
+		NetLifetimeDown int64               `json:"net_lifetime_down"`
+		Process         int                 `json:"process"`
+		Connections     int                 `json:"connections"`
+		ConnectionsUdp  int                 `json:"connections_udp"`
+		Online          bool                `json:"online"`
+		Uptime          int64               `json:"uptime"`
+		Ping            map[string]pingStat `json:"ping"`
 	}
 
 	respMap := make(map[string]recordLike, len(latest))
@@ -346,36 +360,44 @@ func getNodesLatestStatus(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 	// 预取所有 ping 任务
 	pingTasks, _ := tasks.GetAllPingTasks()
 
-	appendOne := func(uuid string, rep *v1.Report) {
+	appendOne := func(uuid string, rep *v2.Report) {
 		if rep == nil {
 			return
 		}
 		stats := getPingStatsForNode(uuid, pingTasks)
+		lifetimeUp, lifetimeDown := trafficledger.Totals(uuid, rep.Network.TotalUp, rep.Network.TotalDown)
 		rl := recordLike{
-			Client:         uuid,
-			Time:           rep.UpdatedAt,
-			Cpu:            float32(rep.CPU.Usage),
-			Gpu:            0,
-			Ram:            rep.Ram.Used,
-			RamTotal:       rep.Ram.Total,
-			Swap:           rep.Swap.Used,
-			SwapTotal:      rep.Swap.Total,
-			Load:           float32(rep.Load.Load1),
-			Load5:          float32(rep.Load.Load5),
-			Load15:         float32(rep.Load.Load15),
-			Temp:           0,
-			Disk:           rep.Disk.Used,
-			DiskTotal:      rep.Disk.Total,
-			NetIn:          rep.Network.Down,
-			NetOut:         rep.Network.Up,
-			NetTotalUp:     rep.Network.TotalUp,
-			NetTotalDown:   rep.Network.TotalDown,
-			Process:        rep.Process,
-			Connections:    rep.Connections.TCP + rep.Connections.UDP,
-			ConnectionsUdp: rep.Connections.UDP,
-			Online:         onlineSet[uuid],
-			Uptime:         rep.Uptime,
-			Ping:           stats,
+			Client:          uuid,
+			Time:            rep.UpdatedAt,
+			Cpu:             float32(rep.CPU.Usage),
+			Gpu:             gpuUsageFromReport(rep),
+			Ram:             rep.Ram.Used,
+			RamTotal:        rep.Ram.Total,
+			Swap:            rep.Swap.Used,
+			SwapTotal:       rep.Swap.Total,
+			Load:            float32(rep.Load.Load1),
+			Load5:           float32(rep.Load.Load5),
+			Load15:          float32(rep.Load.Load15),
+			Temp:            0,
+			Disk:            rep.Disk.Used,
+			DiskTotal:       rep.Disk.Total,
+			NetIn:           rep.Network.Down,
+			NetOut:          rep.Network.Up,
+			NetTotalUp:      rep.Network.TotalUp,
+			NetTotalDown:    rep.Network.TotalDown,
+			NetLifetimeUp:   lifetimeUp,
+			NetLifetimeDown: lifetimeDown,
+			Process:         rep.Process,
+			Connections:     rep.Connections.TCP + rep.Connections.UDP,
+			ConnectionsUdp:  rep.Connections.UDP,
+			Online:          onlineSet[uuid],
+			Uptime:          rep.Uptime,
+			Ping:            stats,
+		}
+		if rep.GPU != nil {
+			rl.GpuCount = rep.GPU.Count
+			rl.GpuAverageUsage = rep.GPU.AverageUsage
+			rl.GpuDetailedInfo = rep.GPU.DetailedInfo
 		}
 		respMap[uuid] = rl
 	}
@@ -532,7 +554,7 @@ func getNodeRecentStatus(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rp
 			Client:         params.UUID,
 			Time:           r.UpdatedAt,
 			Cpu:            float32(r.CPU.Usage),
-			Gpu:            0,
+			Gpu:            gpuUsageFromReport(&r),
 			Ram:            r.Ram.Used,
 			RamTotal:       r.Ram.Total,
 			Swap:           r.Swap.Used,

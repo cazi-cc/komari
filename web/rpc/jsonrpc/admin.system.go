@@ -310,15 +310,7 @@ func adminExec(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcE
 		return nil, rpc.MakeError(rpc.InternalError, "Failed to create task: "+err.Error(), nil)
 	}
 	for _, uuid := range onlineClients {
-		legacy := struct {
-			Message string `json:"message"`
-			Command string `json:"command"`
-			TaskId  string `json:"task_id"`
-		}{Message: "exec", Command: params.Command, TaskId: taskId}
-		payload, _ := json.Marshal(legacy)
-		if agent_runtime.IsV2Client(uuid) {
-			payload, _ = json.Marshal(v2.Request{JSONRPC: v2.Version, Method: v2.MethodAgentExec, Params: v2.ExecParams{TaskID: taskId, Command: params.Command}})
-		}
+		payload, _ := json.Marshal(v2.Request{JSONRPC: v2.Version, Method: v2.MethodAgentExec, Params: v2.ExecParams{TaskID: taskId, Command: params.Command}})
 		client := agent_runtime.GetConnectedClients()[uuid]
 		if client == nil {
 			return nil, rpc.MakeError(rpc.InvalidParams, "Client connection is null: "+uuid, nil)
@@ -345,12 +337,11 @@ func adminExec(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcE
 }
 
 func adminTestSendMessage(_ context.Context, _ *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
-	err := messageSender.SendEvent(models.EventMessage{
+	if err := messageSender.SendNotification(models.EventMessage{
 		Event:   "Test",
 		Time:    time.Now().UTC(),
 		Message: "This is a test message from Komari.",
-	})
-	if err != nil {
+	}); err != nil {
 		return nil, rpc.MakeError(rpc.InternalError, "Failed to send message: "+err.Error(), nil)
 	}
 	return nil, nil

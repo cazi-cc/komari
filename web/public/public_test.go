@@ -77,10 +77,32 @@ func TestReplaceHTMLLanguage(t *testing.T) {
 	}
 }
 
+func TestEmbeddedDistDoesNotEmbedRawFiles(t *testing.T) {
+	if _, err := PublicFS.ReadFile("defaultTheme/dist/index.html"); err == nil {
+		t.Fatal("PublicFS still embeds the raw frontend files")
+	}
+	targetDir := filepath.Join(t.TempDir(), "dist")
+	if err := extractDistArchive(embeddedDistArchive, targetDir); err != nil {
+		t.Fatalf("extract embedded dist: %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(targetDir, IndexFile))
+	if err != nil || len(content) == 0 {
+		t.Fatalf("embedded dist does not contain a non-empty %q", IndexFile)
+	}
+}
+
 func TestStaticRestrictedDoesNotServeCustomAssetOverride(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	oldDefaultDistCacheDir := defaultDistCacheDir
+	defaultDistCacheDir = filepath.Join(t.TempDir(), "dist")
+	if err := extractDistArchive(embeddedDistArchive, defaultDistCacheDir); err != nil {
+		t.Fatalf("extract embedded dist: %v", err)
+	}
+	t.Cleanup(func() {
+		defaultDistCacheDir = oldDefaultDistCacheDir
+	})
 	t.Chdir(t.TempDir())
-	entries, err := fs.ReadDir(PublicFS, "defaultTheme/dist/assets")
+	entries, err := fs.ReadDir(os.DirFS(defaultDistCacheDir), "assets")
 	if err != nil {
 		t.Fatalf("read embedded frontend assets: %v", err)
 	}

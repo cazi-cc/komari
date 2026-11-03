@@ -58,12 +58,10 @@ type Config struct {
 	// SQLite 保存 SQLite 专用选项。
 	SQLite SQLiteOptions
 
-	// RollupPolicy configures downsampling tiers and tiered retention. When it
-	// defines tiers, Store.Compact materializes them and enforces every
-	// retention window. The zero value disables rollups (raw points only).
+	// RollupPolicy configures downsampling tiers and tiered retention. Exact raw
+	// samples use the Store's fixed ten-minute in-memory window.
 	//
-	// RollupPolicy 配置降采样层级和分层保留时间；定义层级后，
-	// Store.Compact 会生成 rollup 并执行保留策略。零值表示禁用 rollup。
+	// RollupPolicy 配置降采样层级和分层保留时间。
 	RollupPolicy RollupPolicy
 }
 
@@ -99,6 +97,8 @@ type SQLiteOptions struct {
 	//
 	// WALAutoCheckpoint 设置 SQLite WAL 自动 checkpoint 页数。
 	WALAutoCheckpoint int
+	// JournalSizeLimitBytes caps the WAL retained after checkpoints.
+	JournalSizeLimitBytes int64
 	// ReadPoolSize, when > 0, opens a second read-only connection pool with
 	// this many connections for SELECT-style calls. SQLite serializes writes,
 	// but WAL lets readers run concurrently, so a read pool lifts read
@@ -158,10 +158,27 @@ func DefaultConfig(driver Driver, dsn string) Config {
 		SQLite: SQLiteOptions{
 			PerformanceProfile: SQLiteProfileBalanced,
 			BusyTimeout:        5 * time.Second,
-			CacheSizeKB:        64 * 1024,
-			TempStoreMemory:    true,
-			MMapSizeBytes:      256 * 1024 * 1024,
-			WALAutoCheckpoint:  1000,
+			// 16 MB per connection: the rollup read plans walk one time range at a
+			// time, and a small page cache turns that walk into repeated pager
+			// fetches. Override with WithSQLiteCacheSizeKB when memory is tighter.
+			//
+			// 每连接 16 MB：rollup 读计划按时间窗连续扫描，页缓存过小会让扫描不断
+			// 重复取页。内存更紧张时可用 WithSQLiteCacheSizeKB 覆盖。
+			CacheSizeKB:           16 * 1024,
+			TempStoreMemory:       false,
+			MMapSizeBytes:         0,
+			WALAutoCheckpoint:     4000,
+			JournalSizeLimitBytes: 4 * 1024 * 1024,
+		},
+		RollupPolicy: RollupPolicy{
+			RawRetention: 10 * time.Minute,
+			Tiers: []RollupTier{
+				{Interval: time.Minute, Retention: 600 * time.Minute},
+				{Interval: 5 * time.Minute, Retention: 600 * 5 * time.Minute},
+				{Interval: time.Hour, Retention: 600 * time.Hour},
+				{Interval: 24 * time.Hour, Retention: 100 * 365 * 24 * time.Hour},
+			},
+			Compression: 30,
 		},
 	}
 }
@@ -228,6 +245,10 @@ func SQLiteConfig(dsn string) Config {
 	// is honored instead of being mistaken for "unset".
 	cfg.MaxOpenConns = 1
 	cfg.MaxIdleConns = 1
+	// SQLite benefits from warm page caches. Unlike client/server backends,
+	// rotating its local file connections only adds churn, so the default keeps
+	// them until the Store closes. Callers can still set a lifetime explicitly.
+	cfg.ConnMaxLifetime = 0
 	return cfg
 }
 
@@ -371,6 +392,13 @@ func WithSQLiteWALAutoCheckpoint(pages int) Option {
 	}
 }
 
+// WithSQLiteJournalSizeLimit sets the WAL bytes retained after checkpoints.
+func WithSQLiteJournalSizeLimit(bytes int64) Option {
+	return func(c *Config) {
+		c.SQLite.JournalSizeLimitBytes = bytes
+	}
+}
+
 // WithSQLiteReadPool enables a dedicated read-only connection pool of n
 // connections for SQLite. Writes stay on the single primary connection
 // (SQLite serializes them); reads fan out across the pool, which WAL mode
@@ -387,10 +415,10 @@ func WithSQLiteReadPool(n int) Option {
 
 // WithRollupPolicy sets the downsampling/retention ladder. Compact uses it to
 // build rollup tiers (each progressively coarser and longer-lived) and to age
-// out raw points and expired tiers.
+// out expired summary tiers.
 //
 // WithRollupPolicy 设置降采样与保留时间阶梯；Compact 会据此构建逐级
-// 更粗、保留更久的 rollup，并清理过期原始点和过期层级。
+// 更粗、保留更久的 rollup，并清理过期层级。
 func WithRollupPolicy(p RollupPolicy) Option {
 	return func(c *Config) {
 		c.RollupPolicy = p
@@ -426,6 +454,18 @@ func (c Config) Validate() error {
 	for _, r := range c.TablePrefix {
 		if !(r == '_' || r >= '0' && r <= '9' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z') {
 			return fmt.Errorf("%w: table prefix must contain only letters, digits, and underscores", ErrInvalidArgument)
+		}
+	}
+	// Bound generated index names to the backend identifier limit. Restructure
+	// performs the stricter check required by its temporary "rebuild_" prefix.
+	switch c.Driver {
+	case DriverMySQL:
+		if len(c.TablePrefix) > 35 {
+			return fmt.Errorf("%w: table prefix is too long for MySQL identifiers", ErrInvalidArgument)
+		}
+	case DriverPostgreSQL:
+		if len(c.TablePrefix) > 34 {
+			return fmt.Errorf("%w: table prefix is too long for PostgreSQL identifiers", ErrInvalidArgument)
 		}
 	}
 	if err := c.RollupPolicy.Validate(); err != nil {

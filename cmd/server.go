@@ -1,8 +1,12 @@
 package cmd
 
 import (
+	"errors"
+	"os"
+
 	appserver "github.com/komari-monitor/komari/internal/server"
 	logger "github.com/komari-monitor/komari/utils/log"
+	frontendpublic "github.com/komari-monitor/komari/web/public"
 
 	"github.com/komari-monitor/komari/cmd/flags"
 	"github.com/spf13/cobra"
@@ -29,6 +33,10 @@ func init() {
 // 具体各阶段的职责与顺序见 internal/server.App。这里只负责串联：
 // 任一初始化阶段失败即中止启动，避免在半初始化状态下对外提供服务。
 func RunServer() {
+	if err := frontendpublic.PrepareDefaultDist(); err != nil {
+		logger.Fatalf("server", "prepare default frontend failed: %v", err)
+	}
+
 	app := appserver.New(appserver.Options{ListenAddr: flags.Listen})
 	if err := app.Bootstrap(); err != nil {
 		_ = app.Shutdown()
@@ -51,16 +59,26 @@ func RunServer() {
 		}
 	}
 
-	required, summary, err := app.LegacyUpgradeRequired()
-	if err != nil {
-		_ = app.Shutdown()
-		logger.Fatalf("server", "server startup failed at %q: %v", "detect-1.2.7-upgrade", err)
-	}
-	if required {
-		completed, err := app.RunLegacyUpgrade(summary)
+	for {
+		requirement, err := app.DatabaseMigrationRequired()
+		if err != nil {
+			completed, recoveryErr := app.RunMetricStoreRecovery(err)
+			if recoveryErr != nil {
+				_ = app.Shutdown()
+				logger.Fatalf("server", "server startup failed at %q: %v", "database-migration-detection-recovery", recoveryErr)
+			}
+			if !completed {
+				return
+			}
+			continue
+		}
+		if !requirement.Required() {
+			break
+		}
+		completed, err := app.RunDatabaseMigration(requirement)
 		if err != nil {
 			_ = app.Shutdown()
-			logger.Fatalf("server", "server startup failed at %q: %v", "run-1.2.7-upgrade", err)
+			logger.Fatalf("server", "server startup failed at %q: %v", "run-database-migration", err)
 		}
 		if !completed {
 			return
@@ -100,6 +118,10 @@ func RunServer() {
 	}
 
 	if err := app.Run(); err != nil {
+		if errors.Is(err, appserver.ErrRestartRequested) {
+			logger.Infof("server", "Service stopped for restart: %v", err)
+			os.Exit(1)
+		}
 		logger.Fatalf("server", "server exited with error: %v", err)
 	}
 }

@@ -3,12 +3,13 @@ package tasks
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
-	"time"
 
 	"github.com/komari-monitor/komari/database/dbcore"
-	"github.com/komari-monitor/komari/database/metricstore"
 	"github.com/komari-monitor/komari/database/models"
+	"github.com/komari-monitor/komari/internal/metricstore"
 	"gorm.io/gorm"
 )
 
@@ -34,17 +35,8 @@ func AddPingTask(clients []string, defaultOn bool, name string, target, taskType
 		if err := tx.Create(&task).Error; err != nil {
 			return err
 		}
-
 		// Append by id to avoid races between concurrent create requests.
-		result := tx.Model(&models.PingTask{}).Where("id = ?", task.Id).Update("weight", int(task.Id))
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected == 0 {
-			return gorm.ErrRecordNotFound
-		}
-
-		return nil
+		return tx.Model(&models.PingTask{}).Where("id = ?", task.Id).Update("weight", int(task.Id)).Error
 	})
 	if err != nil {
 		return 0, err
@@ -197,22 +189,39 @@ func GetAllPingTasks() ([]models.PingTask, error) {
 func GetPingTasksByClient(uuid string) []models.PingTask {
 	db := dbcore.GetDBInstance()
 	var tasks []models.PingTask
-	if err := db.Where("clients LIKE ?", `%"`+uuid+`"%`).Find(&tasks).Error; err != nil {
+	if err := db.Where("clients LIKE ?", `%"`+uuid+`"%`).Order("weight ASC").Order("id ASC").Find(&tasks).Error; err != nil {
 		return nil
 	}
 	return tasks
 }
 
 func UpdatePingTaskOrder(order map[uint]int) error {
+	if len(order) == 0 {
+		return nil
+	}
+
 	db := dbcore.GetDBInstance()
 	err := db.Transaction(func(tx *gorm.DB) error {
-		for id, weight := range order {
-			result := tx.Model(&models.PingTask{}).Where("id = ?", id).Update("weight", weight)
-			if result.Error != nil {
-				return result.Error
-			}
-			if result.RowsAffected == 0 {
-				return gorm.ErrRecordNotFound
+		// Validate all ids before changing any weights. The update response is
+		// not a reliable existence check because some drivers report zero rows
+		// when the new value equals the current value.
+		ids := make([]uint, 0, len(order))
+		for id := range order {
+			ids = append(ids, id)
+		}
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+
+		var existing int64
+		if err := tx.Model(&models.PingTask{}).Where("id IN ?", ids).Count(&existing).Error; err != nil {
+			return err
+		}
+		if existing != int64(len(ids)) {
+			return gorm.ErrRecordNotFound
+		}
+
+		for _, id := range ids {
+			if err := tx.Model(&models.PingTask{}).Where("id = ?", id).Update("weight", order[id]).Error; err != nil {
+				return err
 			}
 		}
 		return nil
@@ -244,27 +253,14 @@ func ReloadPingSchedule() error {
 
 // AddDefaultOnClientUUID 在新客户端注册后，把该 UUID 追加到所有 default_on=true 的任务的 clients 中（去重）。
 func AddDefaultOnClientUUID(uuid string) error {
-	if uuid == "" {
-		return nil
-	}
 	db := dbcore.GetDBInstance()
 	var tasks []models.PingTask
 	if err := db.Where("all_clients = ?", true).Find(&tasks).Error; err != nil {
 		return err
 	}
-	if len(tasks) == 0 {
-		return nil
-	}
 	changed := false
 	for _, task := range tasks {
-		exists := false
-		for _, c := range task.Clients {
-			if c == uuid {
-				exists = true
-				break
-			}
-		}
-		if exists {
+		if slices.Contains(task.Clients, uuid) {
 			continue
 		}
 		next := append(models.StringArray{}, task.Clients...)
@@ -280,8 +276,4 @@ func AddDefaultOnClientUUID(uuid string) error {
 		return ReloadProbeSchedules()
 	}
 	return nil
-}
-
-func GetPingRecords(uuid string, taskId int, start, end time.Time) ([]models.PingRecord, error) {
-	return metricstore.GetPingRecords(context.Background(), uuid, taskId, start, end)
 }

@@ -24,6 +24,7 @@ type Settings struct {
 	LowResourceMode                    bool   `json:"low_resource_mode"` // 低资源模式；首次启动按主机性能自动选择
 	EulaAccepted                       bool   `json:"eula_accepted" default:"false"`
 	BaseScriptsURLKey                  string `json:"base_scripts_url" default:""`
+	SSRFProtectionEnabled              bool   `json:"ssrf_protection_enabled" default:"false"` // 是否启用 SSRF 防护，默认关闭
 	// GeoIP 配置
 	GeoIpEnabled  bool   `json:"geo_ip_enabled" default:"true"`
 	GeoIpProvider string `json:"geo_ip_provider" default:"ipinfo"` // empty, mmdb, ip-api, geojs
@@ -99,4 +100,6 @@ const (
 	UpdatedAtKey                                  = "updated_at"
 	XtermjsSettingsKey                            = "xtermjs_settings"
 	ThemeMarketSourcesKey                         = "theme_market_sources"
+	SSRFProtectionEnabledKey                      = "ssrf_protection_enabled"
+	PluginMarketSourcesKey                        = "plugin_market_sources"
 )

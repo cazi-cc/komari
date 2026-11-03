@@ -1,0 +1,50 @@
+{
+  "upstream_repository": "komari-monitor/komari",
+  "upstream_branch": "main",
+  "base_branch": "main",
+  "sync_branch": "sync/upstream-main",
+  "required_paths": [
+    "database/notification/load.go",
+    "database/tasks/tcp_quality_snapshot.go",
+    "database/tasks/unlock_quality_snapshot.go",
+    "internal/metricstore/probe_details_test.go",
+    "pkg/trafficledger/ledger.go",
+    "protocol/v2/jsonrpc.go",
+    "utils/notifier/traffic_report.go",
+    "web/rpc/jsonrpc/admin.agent_distribution.go",
+    "web/rpc/jsonrpc/admin.notification_compat.go",
+    "web/rpc/jsonrpc/public.metric_window.go"
+  ],
+  "validation_commands": [
+    [
+      "python3",
+      ".github/scripts/test_sync_upstream.py",
+      "-v"
+    ],
+    [
+      "go",
+      "test",
+      "./..."
+    ]
+  ],
+  "protected_paths": [
+    ".github/actions/build-frontend/action.yml",
+    ".github/scripts/sync_upstream.py",
+    ".github/scripts/test_sync_upstream.py",
+    ".github/upstream-sync.json",
+    ".github/workflows/cazi-privacy-image.yml",
+    ".github/workflows/sync-upstream.yml",
+    "database/notification/load.go",
+    "database/tasks/tcp_quality_snapshot.go",
+    "database/tasks/unlock_quality_snapshot.go",
+    "go.mod",
+    "go.sum",
+    "internal/metricstore/probe_details_test.go",
+    "pkg/trafficledger/ledger.go",
+    "protocol/v2/jsonrpc.go",
+    "utils/notifier/traffic_report.go",
+    "web/rpc/jsonrpc/admin.agent_distribution.go",
+    "web/rpc/jsonrpc/admin.notification_compat.go",
+    "web/rpc/jsonrpc/public.metric_window.go"
+  ]
+}

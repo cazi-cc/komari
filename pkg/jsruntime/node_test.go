@@ -51,6 +51,52 @@ func TestNodeCoreModulesAndECMAScriptBuiltins(t *testing.T) {
 	}
 }
 
+func TestNodeWriteFileEncodingOptionsKeepDefaultPermissions(t *testing.T) {
+	baseDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := New(`
+		async function verify() {
+			const fs = require("fs");
+			fs.writeFileSync("sync.txt", "sync", "utf8");
+			fs.appendFileSync("append.txt", "append", "utf8");
+			await fs.promises.writeFile("async.txt", "async", "utf8");
+			await fs.promises.appendFile("async-append.txt", "append", "utf8");
+			fs.writeFileSync("explicit.txt", "explicit", { mode: 0o600 });
+			fs.writeFileSync("zero.txt", "zero", { mode: 0 });
+			const fd = fs.openSync("octal.txt", "w", "600");
+			fs.closeSync(fd);
+			return true;
+		}
+	`, Options{NodeJS: true, BaseDir: baseDir, Console: io.Discard, Timeout: 3 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	if err := runtime.Call("verify"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"sync.txt", "append.txt", "async.txt", "async-append.txt"} {
+		info, err := os.Stat(filepath.Join(baseDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode := info.Mode().Perm(); mode&0o600 != 0o600 {
+			t.Errorf("%s: encoding option created mode %o; owner read/write bits are required", name, mode)
+		}
+	}
+	for name, want := range map[string]os.FileMode{"explicit.txt": 0o600, "zero.txt": 0, "octal.txt": 0o600} {
+		info, err := os.Stat(filepath.Join(baseDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Errorf("%s: got mode %o, want %o", name, got, want)
+		}
+	}
+}
+
 func TestNodeFileAccessConfinementAndAllowAll(t *testing.T) {
 	root := t.TempDir()
 	baseDir := filepath.Join(root, "base")

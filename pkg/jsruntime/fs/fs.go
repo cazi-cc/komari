@@ -260,7 +260,7 @@ func (m *Module) Load(vm *moejs.Runtime, module *engine.Object) {
 			panic(native.GoError(vm, err))
 		}
 		data := buffer.Bytes(vm, moejs.Arg(args, 1))
-		if err := m.nodeWriteFile(path, data, fsMode(vm, moejs.Arg(args, 2), 0o666)); err != nil {
+		if err := m.nodeWriteFile(path, data, fsWriteMode(vm, moejs.Arg(args, 2))); err != nil {
 			panic(native.GoError(vm, err))
 		}
 		return native.From(vm, moejs.Undefined()), nil
@@ -270,7 +270,7 @@ func (m *Module) Load(vm *moejs.Runtime, module *engine.Object) {
 		if err != nil {
 			panic(native.GoError(vm, err))
 		}
-		file, err := m.nodeOpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, fsMode(vm, moejs.Arg(args, 2), 0o666))
+		file, err := m.nodeOpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, fsWriteMode(vm, moejs.Arg(args, 2)))
 		if err == nil {
 			_, writeErr := file.Write(buffer.Bytes(vm, moejs.Arg(args, 1)))
 			err = errors.Join(writeErr, file.Close())
@@ -709,6 +709,16 @@ func encodeFSData(vm *moejs.Runtime, data []byte, encoding string) moejs.Value {
 	}
 	return native.From(vm, buffer.EncodeBytes(vm, data, native.From(vm, encoding)))
 }
+
+// writeFile/appendFile accept an encoding string where open/mkdir accept a
+// numeric or octal mode. Do not coerce "utf8" into permission mode zero.
+func fsWriteMode(vm *moejs.Runtime, value moejs.Value) os.FileMode {
+	if _, encoding := native.Export(vm, value).(string); encoding {
+		return 0o666
+	}
+	return fsMode(vm, value, 0o666)
+}
+
 func fsMode(vm *moejs.Runtime, value moejs.Value, fallback os.FileMode) os.FileMode {
 	if native.IsNil(value) || value.IsUndefined() || value.IsNull() {
 		return fallback

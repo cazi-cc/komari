@@ -72,7 +72,7 @@ func (m *Module) prepareFSAsync(vm *moejs.Runtime, name string, arguments []moej
 	case "writeFile", "appendFile":
 		pathName := native.String(vm, fsArgument(arguments, 0))
 		data := append([]byte(nil), buffer.Bytes(vm, fsArgument(arguments, 1))...)
-		mode := fsMode(vm, fsArgument(arguments, 2), 0o666)
+		mode := fsWriteMode(vm, fsArgument(arguments, 2))
 		appendMode := name == "appendFile"
 		return fsAsyncOperation{run: func() (any, error) {
 			path, err := follow(pathName, true)

@@ -10,6 +10,7 @@ import (
 	"github.com/komari-monitor/komari/database/dbcore"
 	"github.com/komari-monitor/komari/internal/config"
 	"github.com/komari-monitor/komari/pkg/resourceprobe"
+	"github.com/komari-monitor/komari/pkg/trafficledger"
 	"github.com/komari-monitor/komari/utils"
 	logger "github.com/komari-monitor/komari/utils/log"
 )
@@ -41,6 +42,12 @@ func (a *App) Bootstrap() error {
 		return fmt.Errorf("failed to load settings: %w", err)
 	}
 	a.settings = settings
+	ledger, err := trafficledger.Open("./data/traffic_lifetime.json")
+	if err != nil {
+		return fmt.Errorf("failed to load lifetime traffic: %w", err)
+	}
+	trafficledger.SetDefault(ledger)
+	a.addCleanup("lifetime traffic", func(context.Context) error { return ledger.Close() })
 	return nil
 }
 

@@ -5,7 +5,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/komari-monitor/komari/pkg/trafficledger"
 	v1 "github.com/komari-monitor/komari/protocol/v1"
+	logger "github.com/komari-monitor/komari/utils/log"
 	"github.com/komari-monitor/komari/web/connection"
 )
 
@@ -145,6 +147,9 @@ func RecordReport(report v1.Report) {
 		report.UpdatedAt = time.Now().UTC()
 	} else {
 		report.UpdatedAt = report.UpdatedAt.UTC()
+	}
+	if err := trafficledger.Observe(report.UUID, report.UpdatedAt, report.Network.TotalUp, report.Network.TotalDown); err != nil {
+		logger.Errorf("trafficledger", "failed to save cumulative traffic: %v", err)
 	}
 	mu.Lock()
 	defer mu.Unlock()

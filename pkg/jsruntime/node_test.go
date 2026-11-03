@@ -671,6 +671,33 @@ func TestChildProcessPermissionAndExecution(t *testing.T) {
 	}
 }
 
+func TestChildProcessCloseWaitsForBothOutputStreams(t *testing.T) {
+	runtime, err := New(`
+		async function verify(command, environment) {
+			for (let i = 0; i < 16; i++) {
+				const complete = await new Promise(resolve => {
+					const child = require("child_process").spawn(command,
+						["-test.run=^TestNodeChildProcessHelper$"], {env: environment, encoding: "utf8"});
+					let out = "", err = "";
+					child.stdout.on("data", chunk => out += String(chunk));
+					child.stderr.on("data", chunk => err += String(chunk));
+					child.on("error", () => resolve(false));
+					child.on("close", code => resolve(code === 0 && out === "x".repeat(4096) && err === "e".repeat(4096)));
+				});
+				if (!complete) return false;
+			}
+			return true;
+		}
+	`, Options{NodeJS: true, AllowExec: true, BaseDir: t.TempDir(), Console: io.Discard, Timeout: 10 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	if err := runtime.Call("verify", os.Args[0], childHelperEnvironment("both-output")); err != nil {
+		t.Fatalf("close arrived before both output streams drained: %v", err)
+	}
+}
+
 func TestChildProcessOutputLimitAndExitCode(t *testing.T) {
 	jsRuntime, err := New(`
 		function execFile(command, environment, maxBuffer) {
@@ -922,6 +949,10 @@ func TestNodeChildProcessHelper(t *testing.T) {
 		return
 	case "output":
 		_, _ = io.WriteString(os.Stdout, strings.Repeat("x", 4096))
+		os.Exit(0)
+	case "both-output":
+		_, _ = io.WriteString(os.Stdout, strings.Repeat("x", 4096))
+		_, _ = io.WriteString(os.Stderr, strings.Repeat("e", 4096))
 		os.Exit(0)
 	case "exit":
 		os.Exit(7)

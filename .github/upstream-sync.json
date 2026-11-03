@@ -28,6 +28,7 @@
     ]
   ],
   "protected_paths": [
+    ".github/actions/build-frontend/action.yml",
     ".github/scripts/sync_upstream.py",
     ".github/scripts/test_sync_upstream.py",
     ".github/upstream-sync.json",

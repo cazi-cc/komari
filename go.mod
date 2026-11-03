@@ -1,6 +1,8 @@
 module github.com/komari-monitor/komari
 
-go 1.25.0
+go 1.26.10
+
+toolchain go1.27.3
 
 require (
 	github.com/dop251/goja v0.0.0-20251008123653-cf18d89f3cf6
@@ -16,19 +18,19 @@ require (
 	github.com/pquerna/otp v1.5.0
 	github.com/spf13/cobra v1.9.1
 	github.com/stretchr/testify v1.11.1
-	golang.org/x/image v0.35.0
-	golang.org/x/sys v0.33.0
+	golang.org/x/image v0.47.0
+	golang.org/x/sys v0.49.0
 	gorm.io/driver/sqlite v1.5.7
 	gorm.io/gorm v1.26.1
 )
 
 // Misuse of ServerConfig.PublicKeyCallback may cause authorization bypass in golang.org/x/crypto #1
 // golang.org/x/crypto Vulnerable to Denial of Service (DoS) via Slow or Incomplete Key Exchange #3
-require golang.org/x/crypto v0.39.0 // indirect
+require golang.org/x/crypto v0.58.0 // indirect
 
 // HTTP Proxy bypass using IPv6 Zone IDs in golang.org/x/net #2
 // golang.org/x/net vulnerable to Cross-site Scripting #4
-require golang.org/x/net v0.41.0 // indirect
+require golang.org/x/net v0.61.0 // indirect
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
@@ -67,8 +69,8 @@ require (
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.2.12 // indirect
 	golang.org/x/arch v0.15.0 // indirect
-	golang.org/x/sync v0.19.0
-	golang.org/x/text v0.33.0 // indirect
+	golang.org/x/sync v0.24.0
+	golang.org/x/text v0.43.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
